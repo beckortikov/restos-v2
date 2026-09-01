@@ -2413,6 +2413,81 @@ paths:
           description: Не owner, или нет payroll.manage.
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
 
+  /api/v1/employee-relay/{user_id}/schedule:
+    post:
+      tags: [admin]
+      summary: >-
+        Employee relay (104) — central задаёт недельный график смен сотруднику
+        филиала (зеркало ScheduleService.SetTemplate, PUT-семантика: снятые дни
+        исчезают; пустой список снимает график целиком). Требует payroll.manage.
+      parameters:
+        - { in: path, name: user_id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slots]
+              properties:
+                slots:
+                  type: array
+                  items:
+                    type: object
+                    required: [weekday, starts_at, ends_at]
+                    properties:
+                      weekday: { type: integer, minimum: 1, maximum: 7 }
+                      starts_at: { type: string }
+                      ends_at: { type: string }
+      responses:
+        "201":
+          description: Created — строка employee_relay_actions, kind=set_schedule, status=pending.
+          content: { application/json: { schema: { type: object } } }
+        "400":
+          description: "Сотрудник не найден, принадлежит другой сети, или это сотрудник central."
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "403":
+          description: Не owner, или нет payroll.manage.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /api/v1/employee-relay/{user_id}/schedule-day:
+    post:
+      tags: [admin]
+      summary: >-
+        Employee relay (104) — central правит один день графика сотрудника
+        филиала: подмена (work), отгул (off) или возврат к недельному шаблону
+        (reset). Требует payroll.manage.
+      parameters:
+        - { in: path, name: user_id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [date, action]
+              properties:
+                date: { type: string, format: date }
+                action:
+                  type: string
+                  enum: [work, off, reset]
+                  description: "reset снимает правку; «правки не было» не считается ошибкой — центр мог не знать, что филиал уже её убрал"
+                starts_at: { type: string, description: "обязателен при action=work" }
+                ends_at: { type: string, description: "обязателен при action=work" }
+                note: { type: string }
+      responses:
+        "201":
+          description: Created — строка employee_relay_actions, kind=set_schedule_day, status=pending.
+          content: { application/json: { schema: { type: object } } }
+        "400":
+          description: "Сотрудник не найден, принадлежит другой сети, или это сотрудник central."
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "403":
+          description: Не owner, или нет payroll.manage.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
   /api/v1/employee-relay/history:
     get:
       tags: [admin]

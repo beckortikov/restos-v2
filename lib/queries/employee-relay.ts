@@ -131,6 +131,44 @@ export async function requestSetWorkedDaysRelay(userId: string, from: string, to
   return mapAction(row as Record<string, unknown> | undefined)
 }
 
+// requestSetScheduleRelay / requestSetScheduleDayRelay — график смен
+// сотрудника филиала из центра (104). Читается график обычным GET под
+// X-Branch-Id (данные реплицированы), а пишется только так: central не пишет
+// в чужую БД, филиал применит это своим ScheduleService с задержкой пулера.
+export async function requestSetScheduleRelay(
+  userId: string,
+  slots: Array<{ weekday: number; startsAt: string; endsAt: string }>,
+): Promise<EmployeeRelayAction> {
+  const row = await unwrap(api.POST('/api/v1/employee-relay/{user_id}/schedule', {
+    params: { path: { user_id: userId } },
+    body: { slots: slots.map((s) => ({ weekday: s.weekday, starts_at: s.startsAt, ends_at: s.endsAt })) },
+  }))
+  logAction('employee_relay.set_schedule', 'user', userId, 'График смен филиала', { days: slots.length })
+  return mapAction(row as Record<string, unknown> | undefined)
+}
+
+export async function requestSetScheduleDayRelay(input: {
+  userId: string
+  date: string
+  action: 'work' | 'off' | 'reset'
+  startsAt?: string
+  endsAt?: string
+  note?: string
+}): Promise<EmployeeRelayAction> {
+  const row = await unwrap(api.POST('/api/v1/employee-relay/{user_id}/schedule-day', {
+    params: { path: { user_id: input.userId } },
+    body: {
+      date: input.date,
+      action: input.action,
+      starts_at: input.startsAt,
+      ends_at: input.endsAt,
+      note: input.note,
+    },
+  }))
+  logAction('employee_relay.set_schedule_day', 'user', input.userId, `День ${input.date}: ${input.action}`)
+  return mapAction(row as Record<string, unknown> | undefined)
+}
+
 export async function requestToggleDayMultiplierRelay(userId: string, date: string, from: string, to: string): Promise<EmployeeRelayAction> {
   const row = await unwrap(api.POST('/api/v1/employee-relay/{user_id}/day-multiplier', {
     params: { path: { user_id: userId } },

@@ -86,7 +86,8 @@ func newEmployeeRelayFixture(t *testing.T) *employeeRelayFixture {
 	t.Cleanup(srv.Close)
 	// activeConfig без строки sync_settings падает на fallback (см.
 	// employee_relay_pull.go) — таблицу оставляем пустой намеренно.
-	puller := service.NewEmployeeRelayPuller(usersSvc, salarySvc, repo.New(gdb), service.PullerFallback{
+	scheduleSvc := service.NewScheduleService(repo.New(gdb), nil)
+	puller := service.NewEmployeeRelayPuller(usersSvc, salarySvc, scheduleSvc, repo.New(gdb), service.PullerFallback{
 		CentralURL: srv.URL, RestaurantID: branchID, Enabled: true,
 	})
 
@@ -259,6 +260,85 @@ func TestEmployeeRelay_WorkedDaysAndDayMultiplier(t *testing.T) {
 	}
 	if result.Multipliers["2026-08-05"] != 2 {
 		t.Errorf("multiplier на 2026-08-05 = %d, want 2 (множитель не применился на филиале)", result.Multipliers["2026-08-05"])
+	}
+}
+
+// График смен филиала из центра (104): владелец сети задаёт недельный шаблон
+// и точечно правит день, а филиал материализует это своим настоящим
+// ScheduleService — тем же, которым пользуется его собственный менеджер.
+func TestEmployeeRelay_ScheduleTemplateAndDay(t *testing.T) {
+	f := newEmployeeRelayFixture(t)
+
+	empName, empRole := "Сменщик", "cook"
+	empID := uuid.NewString()
+	if err := f.gdb.Create(&models.User{
+		ID: empID, Name: &empName, Role: &empRole, RestaurantID: &f.branchID,
+	}).Error; err != nil {
+		t.Fatalf("seed employee: %v", err)
+	}
+
+	if _, err := f.relaySvc.RequestSetSchedule(f.ctxCentral, empID, service.SetScheduleRelayInput{
+		Slots: []service.TemplateSlotInput{
+			{Weekday: 1, StartsAt: "09:00", EndsAt: "18:00"},
+			{Weekday: 2, StartsAt: "09:00", EndsAt: "18:00"},
+		},
+	}); err != nil {
+		t.Fatalf("RequestSetSchedule: %v", err)
+	}
+	// Вторник — отгул вопреки шаблону.
+	if _, err := f.relaySvc.RequestSetScheduleDay(f.ctxCentral, empID, service.SetScheduleDayRelayInput{
+		Date: "2026-09-08", Action: "off",
+	}); err != nil {
+		t.Fatalf("RequestSetScheduleDay: %v", err)
+	}
+
+	if delivered, err := f.puller.PullOnce(context.Background()); err != nil || delivered != 2 {
+		t.Fatalf("PullOnce = %d, %v, want 2, nil", delivered, err)
+	}
+
+	// Читаем через настоящий API филиала, а не сырым SELECT: план на дату —
+	// это результат наложения override на шаблон, и проверять надо именно его.
+	ctxBranch := audit.WithActor(
+		tenant.WithRestaurant(context.Background(), f.branchID),
+		audit.Actor{UserID: uuid.NewString(), Role: "owner"},
+	)
+	scheduleSvc := service.NewScheduleService(repo.New(f.gdb), nil)
+	plan, err := scheduleSvc.Plan(ctxBranch, "2026-09-07", "2026-09-09", empID)
+	if err != nil {
+		t.Fatalf("Plan на филиале: %v", err)
+	}
+	byDate := map[string]service.PlannedShift{}
+	for _, p := range plan {
+		byDate[p.Date] = p
+	}
+	if got := byDate["2026-09-07"]; got.StartsAt != "09:00" || got.Source != "template" {
+		t.Errorf("понедельник = %+v, want 09:00 из шаблона", got)
+	}
+	if got := byDate["2026-09-08"]; !got.IsOff || got.Source != "override" {
+		t.Errorf("вторник = %+v, want отгул-override", got)
+	}
+	if _, ok := byDate["2026-09-09"]; ok {
+		t.Errorf("среда не в шаблоне — строки быть не должно: %+v", byDate["2026-09-09"])
+	}
+
+	// Снятие правки возвращает день к шаблону; отсутствие правки при повторном
+	// reset не ошибка — центр мог не знать, что менеджер филиала уже её убрал.
+	for i := 0; i < 2; i++ {
+		if _, err := f.relaySvc.RequestSetScheduleDay(f.ctxCentral, empID, service.SetScheduleDayRelayInput{
+			Date: "2026-09-08", Action: "reset",
+		}); err != nil {
+			t.Fatalf("RequestSetScheduleDay reset #%d: %v", i+1, err)
+		}
+		if delivered, err := f.puller.PullOnce(context.Background()); err != nil || delivered != 1 {
+			t.Fatalf("PullOnce reset #%d = %d, %v, want 1, nil", i+1, delivered, err)
+		}
+	}
+	plan, err = scheduleSvc.Plan(ctxBranch, "2026-09-08", "2026-09-08", empID)
+	if err != nil {
+		t.Fatalf("Plan после reset: %v", err)
+	}
+	if len(plan) != 1 || plan[0].Source != "template" || plan[0].IsOff {
+		t.Errorf("после reset вторник = %+v, want шаблонная смена", plan)
 	}
 }
 

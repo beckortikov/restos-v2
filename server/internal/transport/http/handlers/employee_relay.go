@@ -140,3 +140,33 @@ func (h *EmployeeRelayHandler) Ack(w http.ResponseWriter, r *http.Request) {
 	}
 	respond.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
+
+// SetSchedule — POST /api/v1/employee-relay/{user_id}/schedule (104).
+func (h *EmployeeRelayHandler) SetSchedule(w http.ResponseWriter, r *http.Request) {
+	var in service.SetScheduleRelayInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	row, err := h.svc.RequestSetSchedule(r.Context(), chi.URLParam(r, "user_id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, row)
+}
+
+// SetScheduleDay — POST /api/v1/employee-relay/{user_id}/schedule-day (104).
+func (h *EmployeeRelayHandler) SetScheduleDay(w http.ResponseWriter, r *http.Request) {
+	var in service.SetScheduleDayRelayInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	row, err := h.svc.RequestSetScheduleDay(r.Context(), chi.URLParam(r, "user_id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, row)
+}

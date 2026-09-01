@@ -594,6 +594,10 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/employee-relay/{user_id}/pay", employeeRelayH.UpdatePay)
 			g.Post("/employee-relay/{user_id}/worked-days", employeeRelayH.SetWorkedDays)
 			g.Post("/employee-relay/{user_id}/day-multiplier", employeeRelayH.ToggleDayMultiplier)
+			// График смен филиала из центра (104): недельный шаблон и правка
+			// одного дня — те же настоящие ScheduleService-методы на филиале.
+			g.Post("/employee-relay/{user_id}/schedule", employeeRelayH.SetSchedule)
+			g.Post("/employee-relay/{user_id}/schedule-day", employeeRelayH.SetScheduleDay)
 			g.Post("/orders", ordersH.Create)
 			g.Post("/orders/{id}/items", ordersH.AddItems)
 			g.Post("/orders/{id}/close", ordersH.Close)

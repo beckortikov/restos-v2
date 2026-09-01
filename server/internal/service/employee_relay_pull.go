@@ -16,6 +16,7 @@ import (
 
 	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db/models"
+	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
@@ -33,15 +34,19 @@ import (
 // SetWorkedDays/ToggleDayMultiplier иначе молча отклонят синтетического
 // актора без реального UserID.
 type EmployeeRelayPuller struct {
-	usersSvc  *UsersService
-	salarySvc *SalaryService
-	r         *repo.Repo
-	client    *http.Client
-	fallback  PullerFallback
+	usersSvc    *UsersService
+	salarySvc   *SalaryService
+	scheduleSvc *ScheduleService
+	r           *repo.Repo
+	client      *http.Client
+	fallback    PullerFallback
 }
 
-func NewEmployeeRelayPuller(usersSvc *UsersService, salarySvc *SalaryService, r *repo.Repo, fallback PullerFallback) *EmployeeRelayPuller {
-	return &EmployeeRelayPuller{usersSvc: usersSvc, salarySvc: salarySvc, r: r, client: &http.Client{Timeout: 30 * time.Second}, fallback: fallback}
+func NewEmployeeRelayPuller(usersSvc *UsersService, salarySvc *SalaryService, scheduleSvc *ScheduleService, r *repo.Repo, fallback PullerFallback) *EmployeeRelayPuller {
+	return &EmployeeRelayPuller{
+		usersSvc: usersSvc, salarySvc: salarySvc, scheduleSvc: scheduleSvc,
+		r: r, client: &http.Client{Timeout: 30 * time.Second}, fallback: fallback,
+	}
 }
 
 // activeConfig — идентично DeliveryPuller.activeConfig: та же sync_settings
@@ -137,6 +142,10 @@ func (p *EmployeeRelayPuller) processOne(ctx context.Context, centralURL, token,
 		return p.processSetWorkedDays(ctx, centralURL, token, restaurantID, ea)
 	case "toggle_day_multiplier":
 		return p.processToggleDayMultiplier(ctx, centralURL, token, restaurantID, ea)
+	case "set_schedule":
+		return p.processSetSchedule(ctx, centralURL, token, restaurantID, ea)
+	case "set_schedule_day":
+		return p.processSetScheduleDay(ctx, centralURL, token, restaurantID, ea)
 	default:
 		msg := "неизвестный тип команды: " + ea.Kind
 		p.ack(ctx, centralURL, token, ea.ID, AckEmployeeRelayInput{Status: "failed", Error: &msg})
@@ -192,6 +201,70 @@ func (p *EmployeeRelayPuller) processPatch(ctx context.Context, centralURL, toke
 	}
 	p.recordReceived(ctx, ea.ID, user.ID)
 	p.ack(ctx, centralURL, token, ea.ID, AckEmployeeRelayInput{Status: "delivered", LocalUserID: &user.ID})
+	return true
+}
+
+// processSetSchedule — недельный график (ScheduleService.SetTemplate, 104).
+func (p *EmployeeRelayPuller) processSetSchedule(ctx context.Context, centralURL, token, restaurantID string, ea models.EmployeeRelayAction) bool {
+	if ea.TargetUserID == nil {
+		msg := "команда без target_user_id"
+		p.ack(ctx, centralURL, token, ea.ID, AckEmployeeRelayInput{Status: "failed", Error: &msg})
+		return false
+	}
+	var in SetScheduleRelayInput
+	if err := json.Unmarshal(ea.Payload, &in); err != nil {
+		msg := err.Error()
+		p.ack(ctx, centralURL, token, ea.ID, AckEmployeeRelayInput{Status: "failed", Error: &msg})
+		return false
+	}
+	_, err := p.scheduleSvc.SetTemplate(p.actorCtx(ctx, restaurantID), SetTemplateInput{
+		UserID: *ea.TargetUserID, Slots: in.Slots,
+	})
+	if err != nil {
+		msg := err.Error()
+		p.ack(ctx, centralURL, token, ea.ID, AckEmployeeRelayInput{Status: "failed", Error: &msg})
+		return false
+	}
+	p.recordReceived(ctx, ea.ID, *ea.TargetUserID)
+	p.ack(ctx, centralURL, token, ea.ID, AckEmployeeRelayInput{Status: "delivered", LocalUserID: ea.TargetUserID})
+	return true
+}
+
+// processSetScheduleDay — правка одного дня графика (104). action=reset
+// снимает правку через DeleteDay; «правки не было» — не ошибка команды:
+// центр мог не знать, что менеджер филиала уже вернул день к шаблону.
+func (p *EmployeeRelayPuller) processSetScheduleDay(ctx context.Context, centralURL, token, restaurantID string, ea models.EmployeeRelayAction) bool {
+	if ea.TargetUserID == nil {
+		msg := "команда без target_user_id"
+		p.ack(ctx, centralURL, token, ea.ID, AckEmployeeRelayInput{Status: "failed", Error: &msg})
+		return false
+	}
+	var in SetScheduleDayRelayInput
+	if err := json.Unmarshal(ea.Payload, &in); err != nil {
+		msg := err.Error()
+		p.ack(ctx, centralURL, token, ea.ID, AckEmployeeRelayInput{Status: "failed", Error: &msg})
+		return false
+	}
+	actorCtx := p.actorCtx(ctx, restaurantID)
+	var err error
+	if in.Action == "reset" {
+		err = p.scheduleSvc.DeleteDay(actorCtx, *ea.TargetUserID, in.Date)
+		if errors.Is(err, apperrors.ErrNotFound) {
+			err = nil
+		}
+	} else {
+		_, err = p.scheduleSvc.SetDay(actorCtx, ScheduleDayInput{
+			UserID: *ea.TargetUserID, Date: in.Date, Kind: in.Action,
+			StartsAt: in.StartsAt, EndsAt: in.EndsAt, Note: in.Note,
+		})
+	}
+	if err != nil {
+		msg := err.Error()
+		p.ack(ctx, centralURL, token, ea.ID, AckEmployeeRelayInput{Status: "failed", Error: &msg})
+		return false
+	}
+	p.recordReceived(ctx, ea.ID, *ea.TargetUserID)
+	p.ack(ctx, centralURL, token, ea.ID, AckEmployeeRelayInput{Status: "delivered", LocalUserID: ea.TargetUserID})
 	return true
 }
 

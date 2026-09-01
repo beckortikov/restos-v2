@@ -349,6 +349,10 @@ func main() {
 	employeePuller := service.NewEmployeeRelayPuller(
 		service.NewUsersService(repo.New(gdb)),
 		service.NewSalaryService(repo.New(gdb)),
+		// График смен (104) материализуется тем же настоящим сервисом, что и
+		// локальные правки менеджера — фото-хранилище ему не нужно, оно
+		// участвует только в перекличке.
+		service.NewScheduleService(repo.New(gdb), nil),
 		repo.New(gdb),
 		service.PullerFallback{
 			CentralURL: cfg.SyncCentralURL, Token: cfg.SyncToken,

@@ -6150,6 +6150,151 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/employee-relay/{user_id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Employee relay (104) — central задаёт недельный график смен сотруднику филиала (зеркало ScheduleService.SetTemplate, PUT-семантика: снятые дни исчезают; пустой список снимает график целиком). Требует payroll.manage. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    user_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        slots: {
+                            weekday: number;
+                            starts_at: string;
+                            ends_at: string;
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Created — строка employee_relay_actions, kind=set_schedule, status=pending. */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Сотрудник не найден, принадлежит другой сети, или это сотрудник central. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+                /** @description Не owner, или нет payroll.manage. */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/employee-relay/{user_id}/schedule-day": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Employee relay (104) — central правит один день графика сотрудника филиала: подмена (work), отгул (off) или возврат к недельному шаблону (reset). Требует payroll.manage. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    user_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: date */
+                        date: string;
+                        /**
+                         * @description reset снимает правку; «правки не было» не считается ошибкой — центр мог не знать, что филиал уже её убрал
+                         * @enum {string}
+                         */
+                        action: "work" | "off" | "reset";
+                        /** @description обязателен при action=work */
+                        starts_at?: string;
+                        /** @description обязателен при action=work */
+                        ends_at?: string;
+                        note?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created — строка employee_relay_actions, kind=set_schedule_day, status=pending. */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Сотрудник не найден, принадлежит другой сети, или это сотрудник central. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+                /** @description Не owner, или нет payroll.manage. */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/employee-relay/history": {
         parameters: {
             query?: never;

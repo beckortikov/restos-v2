@@ -9,6 +9,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { fetchUsers } from '@/lib/queries'
+import { requestSetScheduleDayRelay, requestSetScheduleRelay } from '@/lib/queries/employee-relay'
+import { useBranchView } from '@/hooks/use-branch-view'
 import {
   deleteScheduleDay, fetchAttendancePhoto, fetchRollCall, fetchSchedule, fetchScheduleTemplate,
   saveScheduleTemplate, setScheduleDay,
@@ -65,6 +67,9 @@ function isToday(s: string): boolean {
 type Mode = 'grid' | 'rollcall'
 
 export default function SchedulePage() {
+  // Просмотр «как филиал» (ADR-003): читаем обычным GET под X-Branch-Id, а
+  // пишем через employee-relay — central не пишет в чужую БД.
+  const isBranchView = useBranchView()
   const [mode, setMode] = useState<Mode>('grid')
   const [employees, setEmployees] = useState<User[]>([])
   const [weekStart, setWeekStart] = useState(() => mondayOf(ymd(new Date())))
@@ -133,6 +138,11 @@ export default function SchedulePage() {
           <p className="text-sm text-muted-foreground">
             План, с которым сравниваются отметки прихода. Без него «не пришёл» неотличим от выходного.
           </p>
+          {isBranchView && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+              Просмотр филиала: изменения уходят в очередь и применяются на его кассе в течение минуты.
+            </p>
+          )}
         </div>
         <div className="flex gap-1 bg-muted/50 p-1 rounded-xl">
           <button
@@ -176,6 +186,7 @@ export default function SchedulePage() {
           user={dayEdit.user}
           date={dayEdit.date}
           current={dayEdit.current}
+          viaRelay={isBranchView}
           onClose={() => setDayEdit(null)}
           onSaved={() => { setDayEdit(null); void loadPlan() }}
         />
@@ -183,6 +194,7 @@ export default function SchedulePage() {
       {templateFor && (
         <TemplateDialog
           user={templateFor}
+          viaRelay={isBranchView}
           onClose={() => setTemplateFor(null)}
           onSaved={() => { setTemplateFor(null); void loadPlan() }}
         />
@@ -487,11 +499,12 @@ function Stat({ label, value, tone, icon }: { label: string; value: number; tone
 // ─── Диалог: день ──────────────────────────────────────────────────────────
 
 function DayDialog({
-  user, date, current, onClose, onSaved,
+  user, date, current, viaRelay, onClose, onSaved,
 }: {
   user: User
   date: string
   current?: PlannedShift
+  viaRelay: boolean
   onClose: () => void
   onSaved: () => void
 }) {
@@ -503,8 +516,13 @@ function DayDialog({
   const save = async () => {
     setSaving(true)
     try {
-      await setScheduleDay({ userId: user.id, date, kind, startsAt, endsAt })
-      toast.success(kind === 'off' ? 'Отгул поставлен' : 'Смена сохранена')
+      if (viaRelay) {
+        await requestSetScheduleDayRelay({ userId: user.id, date, action: kind, startsAt, endsAt })
+        toast.success('Отправлено на кассу филиала')
+      } else {
+        await setScheduleDay({ userId: user.id, date, kind, startsAt, endsAt })
+        toast.success(kind === 'off' ? 'Отгул поставлен' : 'Смена сохранена')
+      }
       onSaved()
     } catch (e) {
       toast.error(humanizeError(e))
@@ -516,8 +534,13 @@ function DayDialog({
   const reset = async () => {
     setSaving(true)
     try {
-      await deleteScheduleDay(user.id, date)
-      toast.success('День вернулся к недельному шаблону')
+      if (viaRelay) {
+        await requestSetScheduleDayRelay({ userId: user.id, date, action: 'reset' })
+        toast.success('Отправлено на кассу филиала')
+      } else {
+        await deleteScheduleDay(user.id, date)
+        toast.success('День вернулся к недельному шаблону')
+      }
       onSaved()
     } catch (e) {
       toast.error(humanizeError(e))
@@ -584,7 +607,7 @@ function DayDialog({
 
 interface SlotDraft { on: boolean; startsAt: string; endsAt: string }
 
-function TemplateDialog({ user, onClose, onSaved }: { user: User; onClose: () => void; onSaved: () => void }) {
+function TemplateDialog({ user, viaRelay, onClose, onSaved }: { user: User; viaRelay: boolean; onClose: () => void; onSaved: () => void }) {
   const [slots, setSlots] = useState<SlotDraft[]>(
     () => Array.from({ length: 7 }, () => ({ on: false, startsAt: '09:00', endsAt: '18:00' })),
   )
@@ -619,11 +642,14 @@ function TemplateDialog({ user, onClose, onSaved }: { user: User; onClose: () =>
   const save = async () => {
     setSaving(true)
     try {
-      await saveScheduleTemplate(
-        user.id,
-        slots.flatMap((s, i) => (s.on ? [{ weekday: i + 1, startsAt: s.startsAt, endsAt: s.endsAt }] : [])),
-      )
-      toast.success('Недельный график сохранён')
+      const payload = slots.flatMap((s, i) => (s.on ? [{ weekday: i + 1, startsAt: s.startsAt, endsAt: s.endsAt }] : []))
+      if (viaRelay) {
+        await requestSetScheduleRelay(user.id, payload)
+        toast.success('Отправлено на кассу филиала')
+      } else {
+        await saveScheduleTemplate(user.id, payload)
+        toast.success('Недельный график сохранён')
+      }
       onSaved()
     } catch (e) {
       toast.error(humanizeError(e))

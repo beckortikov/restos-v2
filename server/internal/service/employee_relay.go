@@ -339,6 +339,68 @@ func (s *EmployeeRelayService) RequestToggleDayMultiplier(ctx context.Context, t
 	return s.enqueue(ctx, rid, account, *user.RestaurantID, "toggle_day_multiplier", &targetUserID, in)
 }
 
+// ─── График смен (104) ───────────────────────────────────────────────────
+
+// SetScheduleRelayInput — body POST /api/v1/employee-relay/{user_id}/schedule.
+// Слоты в том же виде, что у локального ScheduleService.SetTemplate: PUT-
+// семантика, снятые дни исчезают.
+type SetScheduleRelayInput struct {
+	Slots []TemplateSlotInput `json:"slots"`
+}
+
+// RequestSetSchedule — central задаёт недельный график сотруднику филиала.
+func (s *EmployeeRelayService) RequestSetSchedule(ctx context.Context, targetUserID string, in SetScheduleRelayInput) (*models.EmployeeRelayAction, error) {
+	rid, account, err := s.requireCentralOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
+	}
+	// Пустой список — это НЕ ошибка, а «снять график целиком»: сотрудник
+	// больше не выходит по расписанию. Запрещать пришлось бы городить
+	// отдельную команду ради того же результата.
+	user, err := s.resolveTargetUser(ctx, rid, account, targetUserID)
+	if err != nil {
+		return nil, err
+	}
+	return s.enqueue(ctx, rid, account, *user.RestaurantID, "set_schedule", &targetUserID, in)
+}
+
+// SetScheduleDayRelayInput — body POST /api/v1/employee-relay/{user_id}/schedule-day.
+type SetScheduleDayRelayInput struct {
+	Date string `json:"date"`
+	// Action: work | off | reset. reset снимает правку и возвращает день к
+	// недельному шаблону — отдельным kind'ом это было бы третьей командой
+	// ради одной строки в пуллере.
+	Action   string  `json:"action"`
+	StartsAt *string `json:"starts_at,omitempty"`
+	EndsAt   *string `json:"ends_at,omitempty"`
+	Note     *string `json:"note,omitempty"`
+}
+
+// RequestSetScheduleDay — central правит один день графика сотрудника филиала.
+func (s *EmployeeRelayService) RequestSetScheduleDay(ctx context.Context, targetUserID string, in SetScheduleDayRelayInput) (*models.EmployeeRelayAction, error) {
+	rid, account, err := s.requireCentralOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
+	}
+	if in.Date == "" {
+		return nil, apperrors.Wrap("VALIDATION", "date is required", nil)
+	}
+	if in.Action != "work" && in.Action != "off" && in.Action != "reset" {
+		return nil, apperrors.Wrap("VALIDATION", "action должен быть work, off или reset", nil)
+	}
+	user, err := s.resolveTargetUser(ctx, rid, account, targetUserID)
+	if err != nil {
+		return nil, err
+	}
+	return s.enqueue(ctx, rid, account, *user.RestaurantID, "set_schedule_day", &targetUserID, in)
+}
+
 // ─── История / очередь / ack ─────────────────────────────────────────────
 
 // EmployeeRelayHistoryItem — одна строка истории (central), с человеко-
