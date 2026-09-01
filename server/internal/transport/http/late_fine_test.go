@@ -187,3 +187,52 @@ func TestLateFine_NotOfferedWithoutPolicy(t *testing.T) {
 		t.Fatalf("штраф без правил: ожидали 400, получили %d %s", r.StatusCode, b)
 	}
 }
+
+// Политика опозданий должна сохраняться через тот эндпоинт, которым её правит
+// фронт — PATCH /restaurants/{id}. Поля, добавленные только в соседний
+// RestaurantInput (/restaurant), молча не сохранялись: PATCH отвечал 200, а
+// значения оставались нулевыми, и перекличка не предлагала штрафов.
+func TestLateFine_PolicySavedViaRestaurantsPatch(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb := openTestDB(t)
+	gdb.Model(&models.User{}).Where("restaurant_id = ?", f.rid).
+		Update("permissions", datatypes.JSON([]byte(`{"actions":{"payroll.manage":true,"users.manage":true}}`)))
+
+	r, b := f.patch(t, "/api/v1/restaurants/"+f.rid, tok, uuid.NewString(), map[string]any{
+		"late_grace_minutes":   7,
+		"late_fine_fixed":      "10",
+		"late_fine_per_minute": "2",
+		"late_fine_max":        "100",
+	})
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("patch: %d %s", r.StatusCode, b)
+	}
+
+	var rest models.Restaurant
+	if err := gdb.Where("id = ?", f.rid).First(&rest).Error; err != nil {
+		t.Fatal(err)
+	}
+	if rest.LateGraceMinutes != 7 {
+		t.Fatalf("late_grace_minutes = %d, want 7", rest.LateGraceMinutes)
+	}
+	if rest.LateFineFixed.String() != "10" || rest.LateFinePerMinute.String() != "2" || rest.LateFineMax.String() != "100" {
+		t.Fatalf("суммы политики не сохранились: %s / %s / %s",
+			rest.LateFineFixed.String(), rest.LateFinePerMinute.String(), rest.LateFineMax.String())
+	}
+
+	// И перекличка сразу видит новую политику — иначе экран продолжал бы
+	// говорить «штрафы не настроены» после успешного сохранения.
+	r, b = f.get(t, "/api/v1/schedule/roll-call?date=2026-09-07", tok)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("roll-call: %d %s", r.StatusCode, b)
+	}
+	var rep struct {
+		GraceMinutes    int  `json:"grace_minutes"`
+		FinesConfigured bool `json:"fines_configured"`
+	}
+	_ = json.Unmarshal(b, &rep)
+	if rep.GraceMinutes != 7 || !rep.FinesConfigured {
+		t.Fatalf("перекличка не увидела политику: %+v", rep)
+	}
+}

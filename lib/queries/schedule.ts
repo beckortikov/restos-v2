@@ -193,8 +193,12 @@ export async function fetchRollCall(date: string): Promise<RollCallReport> {
  */
 export async function fetchAttendancePhoto(entryId: string, kind: 'in' | 'out' = 'in'): Promise<string> {
   const token = localStorage.getItem('restos-v4-token') || ''
+  // getBaseURL отдаёт origin БЕЗ завершающего слэша (а в same-origin режиме —
+  // пустую строку), поэтому склеиваем через явный разделитель: без него
+  // получалось «http://host:3002api/v1/…» и fetch падал на разборе URL.
+  const base = getBaseURL().replace(/\/$/, '')
   const res = await fetch(
-    `${getBaseURL()}api/v1/attendance/photo/${encodeURIComponent(entryId)}?kind=${kind}`,
+    `${base}/api/v1/attendance/photo/${encodeURIComponent(entryId)}?kind=${kind}`,
     { headers: token ? { Authorization: `Bearer ${token}` } : {} },
   )
   if (!res.ok) throw new Error(res.status === 404 ? 'Снимок не сохранён или уже удалён' : `HTTP ${res.status}`)

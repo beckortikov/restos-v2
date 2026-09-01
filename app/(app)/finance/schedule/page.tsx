@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CalendarDays, Camera, ClipboardCheck, Clock, Coins, Loader2, RotateCcw, Users } from 'lucide-react'
+import { CalendarDays, Camera, Check, ClipboardCheck, Clock, Coins, Loader2, RotateCcw, Users } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { FinanceTabs } from '@/components/finance/finance-tabs'
@@ -63,6 +63,15 @@ function shortDate(s: string): string {
 
 function isToday(s: string): boolean {
   return s === ymd(new Date())
+}
+
+/** «1 смена / 2 смены / 5 смен» — русские окончания, без них счётчик читается как машинный. */
+function plural(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return `${n} ${one}`
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} ${few}`
+  return `${n} ${many}`
 }
 
 // ─── Страница ──────────────────────────────────────────────────────────────
@@ -250,30 +259,46 @@ function WeekGrid({
                 {days.map((d, i) => (
                   <th
                     key={d}
-                    className={`px-2 py-2 font-medium text-center ${isToday(d) ? 'text-primary' : ''}`}
+                    // Сегодняшний столбец подсвечен целиком, а не только
+                    // заголовком: глазу нужно опорное место, иначе в семи
+                    // одинаковых колонках теряешься.
+                    className={`px-2 py-2 font-medium text-center ${isToday(d) ? 'text-primary bg-primary/5' : ''}`}
                   >
                     <div>{WEEKDAYS[i]}</div>
-                    <div className="text-xs text-muted-foreground">{shortDate(d)}</div>
+                    <div className={`text-xs ${isToday(d) ? 'text-primary/70' : 'text-muted-foreground'}`}>{shortDate(d)}</div>
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {employees.map((u) => (
+              {employees.map((u) => {
+                const shiftsCount = days.filter((d) => {
+                  const c = planIndex.get(`${u.id}|${d}`)
+                  return c && !c.isOff
+                }).length
+                return (
                 <tr key={u.id} className="border-t">
                   <td className="px-3 py-2">
-                    <div className="font-medium truncate">{u.name || u.username}</div>
+                    {/* Число смен — у имени, а не у кнопки: «сколько он вообще
+                        работает» иначе приходится складывать глазами по семи
+                        ячейкам, а под кнопкой строка переносится. */}
+                    <div className="flex items-baseline gap-2 min-w-0">
+                      <span className="font-medium truncate">{u.name || u.username}</span>
+                      {shiftsCount > 0 && (
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">{plural(shiftsCount, 'смена', 'смены', 'смен')}</span>
+                      )}
+                    </div>
                     <button
                       onClick={() => onTemplate(u)}
-                      className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+                      className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 whitespace-nowrap"
                     >
-                      <Clock className="w-3 h-3" /> Неделя по умолчанию
+                      <Clock className="w-3 h-3" /> Шаблон недели
                     </button>
                   </td>
                   {days.map((d) => {
                     const cell = planIndex.get(`${u.id}|${d}`)
                     return (
-                      <td key={d} className="px-1.5 py-1.5 text-center">
+                      <td key={d} className={`px-1.5 py-1.5 text-center ${isToday(d) ? 'bg-primary/5' : ''}`}>
                         <button
                           onClick={() => onCell(u, d)}
                           className={`w-full rounded-lg px-2 py-2 text-xs transition-colors ${cellClass(cell)}`}
@@ -284,7 +309,8 @@ function WeekGrid({
                     )
                   })}
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -323,11 +349,31 @@ const STATUS_LABEL: Record<RollCallStatus, string> = {
 }
 
 const STATUS_TONE: Record<RollCallStatus, string> = {
-  on_time: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-  late: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
-  absent: 'bg-red-500/10 text-red-600 dark:text-red-400',
-  unplanned: 'bg-sky-500/10 text-sky-600 dark:text-sky-400',
+  on_time: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
+  late: 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
+  absent: 'bg-red-500/10 text-red-700 dark:text-red-400',
+  unplanned: 'bg-sky-500/10 text-sky-700 dark:text-sky-400',
   off: 'bg-muted text-muted-foreground',
+}
+
+// Строки-исключения подсвечиваем целиком, а не одним бейджем: смысл экрана —
+// с одного взгляда увидеть, где не так, не вчитываясь в каждую строку.
+const ROW_TONE: Record<RollCallStatus, string> = {
+  on_time: '',
+  late: 'bg-amber-500/[0.06]',
+  absent: 'bg-red-500/[0.06]',
+  unplanned: 'bg-sky-500/[0.05]',
+  off: '',
+}
+
+// Цветная полоса слева — тот же сигнал для тех, кто различает не оттенки, а
+// форму, и для печати в ч/б.
+const ROW_ACCENT: Record<RollCallStatus, string> = {
+  on_time: 'bg-emerald-500/70',
+  late: 'bg-amber-500',
+  absent: 'bg-red-500',
+  unplanned: 'bg-sky-500',
+  off: 'bg-transparent',
 }
 
 function RollCallView({
@@ -362,22 +408,19 @@ function RollCallView({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => onDate(addDays(date, -1))} aria-label="Предыдущий день">←</Button>
         <Input
           type="date"
           value={date}
           onChange={(e) => onDate(e.target.value)}
           className="w-44"
         />
+        <Button variant="outline" size="sm" onClick={() => onDate(addDays(date, 1))} aria-label="Следующий день">→</Button>
         <Button variant="outline" size="sm" onClick={() => onDate(ymd(new Date()))}>Сегодня</Button>
+        <div className="flex-1" />
         <Button variant="outline" size="sm" onClick={() => setRulesOpen(true)}>
           <Coins className="w-4 h-4 mr-1.5" /> Правила опозданий
         </Button>
-        {report && (
-          <span className="text-xs text-muted-foreground">
-            Допуск {report.graceMinutes} мин
-            {report.finesConfigured ? '' : ' · штрафы не настроены'}
-          </span>
-        )}
       </div>
 
       {loading ? (
@@ -397,45 +440,91 @@ function RollCallView({
           {report.rows.length === 0 ? (
             <EmptyHint text="На этот день нет ни плановых смен, ни отметок." />
           ) : (
-            <div className="border rounded-xl divide-y">
-              {report.rows.map((row) => (
-                <div key={row.userId} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
-                  <SelfieThumb row={row} onOpen={() => setPhotoFor(row)} />
-                  <div className="flex-1 min-w-40">
-                    <div className="font-medium">{row.userName || '—'}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {row.plannedStart
-                        ? `По графику ${row.plannedStart}–${row.plannedEnd}`
-                        : 'Смена не запланирована'}
-                    </div>
-                  </div>
-                  <div className="text-xs text-muted-foreground w-32">
-                    {row.clockIn ? `Пришёл ${timeOf(row.clockIn)}` : '—'}
-                    {row.clockOut ? ` · ушёл ${timeOf(row.clockOut)}` : ''}
-                  </div>
-                  <span className={`text-xs px-2 py-1 rounded-md font-medium ${STATUS_TONE[row.status]}`}>
-                    {STATUS_LABEL[row.status]}
-                    {row.status === 'late' && row.lateMinutes > 0 ? ` · ${row.lateMinutes} мин` : ''}
-                  </span>
-                  {row.status === 'late' && (
-                    row.fined ? (
-                      <span className="text-xs text-muted-foreground w-28 text-right">Штраф удержан</span>
-                    ) : row.suggestedFine && canFine ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={finingId === row.userId}
-                        onClick={() => void applyFine(row)}
-                        className="w-28"
+            <div className="border rounded-xl overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm min-w-[720px]">
+                  <thead>
+                    <tr className="bg-muted/40 text-muted-foreground">
+                      <th className="text-left font-medium px-3 py-2.5 w-[34%]">Сотрудник</th>
+                      <th className="text-left font-medium px-3 py-2.5">По графику</th>
+                      <th className="text-left font-medium px-3 py-2.5">Пришёл / ушёл</th>
+                      <th className="text-left font-medium px-3 py-2.5">Статус</th>
+                      <th className="text-right font-medium px-3 py-2.5 w-44">Штраф</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.rows.map((row) => (
+                      <tr
+                        key={row.userId}
+                        className={`border-t transition-colors hover:bg-muted/40 ${ROW_TONE[row.status]}`}
                       >
-                        {finingId === row.userId
-                          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          : <>Удержать {formatCurrency(Number(row.suggestedFine))}</>}
-                      </Button>
-                    ) : <span className="w-28" />
-                  )}
-                </div>
-              ))}
+                        <td className="px-0 py-2.5">
+                          <div className="flex items-center gap-3">
+                            <span className={`w-1 h-10 rounded-r ${ROW_ACCENT[row.status]}`} />
+                            {/* Клик по сотруднику — открыть снимок отметки.
+                                Кликается вся ячейка с именем, а не только
+                                миниатюра: попасть в кружок 40px мышью на
+                                ходу неудобно, а искать «где нажать» никто
+                                не станет. */}
+                            <button
+                              onClick={() => setPhotoFor(row)}
+                              className="flex items-center gap-3 text-left flex-1 min-w-0 group"
+                              title={row.photoThumb ? 'Показать снимок отметки' : 'Снимка нет'}
+                            >
+                              <SelfieThumb row={row} />
+                              <span className="min-w-0">
+                                <span className="font-medium block truncate group-hover:underline">
+                                  {row.userName || '—'}
+                                </span>
+                                <span className="text-xs text-muted-foreground">
+                                  {row.photoThumb ? 'Есть фото отметки' : 'Без снимка'}
+                                </span>
+                              </span>
+                            </button>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">
+                          {row.plannedStart
+                            ? <span>{row.plannedStart}–{row.plannedEnd}</span>
+                            : <span className="text-muted-foreground">не запланирована</span>}
+                        </td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">
+                          {row.clockIn ? (
+                            <span>
+                              {timeOf(row.clockIn)}
+                              <span className="text-muted-foreground"> → {row.clockOut ? timeOf(row.clockOut) : 'на смене'}</span>
+                            </span>
+                          ) : <span className="text-muted-foreground">—</span>}
+                        </td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">
+                          <span className={`text-xs px-2 py-1 rounded-md font-medium ${STATUS_TONE[row.status]}`}>
+                            {STATUS_LABEL[row.status]}
+                            {row.status === 'late' && row.lateMinutes > 0 ? ` · ${row.lateMinutes} мин` : ''}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                          <FineCell
+                            row={row}
+                            canFine={canFine}
+                            finesConfigured={report.finesConfigured}
+                            busy={finingId === row.userId}
+                            onFine={() => void applyFine(row)}
+                            onOpenRules={() => setRulesOpen(true)}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="px-3 py-2 border-t bg-muted/20 text-xs text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
+                <span>Опоздание считается от планового начала смены, допуск {report.graceMinutes} мин.</span>
+                {report.finesConfigured
+                  ? <span>Штраф удерживается только по нажатию — сумма считается по правилам.</span>
+                  : <span>Штрафы не настроены — суммы не предлагаются.</span>}
+                {report.timezone && <span>Часовой пояс: {report.timezone}</span>}
+              </div>
             </div>
           )}
         </>
@@ -447,188 +536,42 @@ function RollCallView({
   )
 }
 
-/**
- * Правила опозданий (105): штраф = фикс + за минуту × (минуты сверх допуска),
- * не больше потолка. Обе части, а не одна: где-то принято «100 за опоздание»,
- * где-то «по 2 за минуту».
- */
-function LateRulesDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const { restaurantId } = useAuth()
-  const [grace, setGrace] = useState('5')
-  const [fixed, setFixed] = useState('0')
-  const [perMinute, setPerMinute] = useState('0')
-  const [max, setMax] = useState('0')
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    let alive = true
-    void (async () => {
-      try {
-        const r = restaurantId ? await fetchRestaurantById(restaurantId) : null
-        if (!alive || !r) return
-        setGrace(String(r.lateGraceMinutes ?? 5))
-        setFixed(String(r.lateFineFixed ?? 0))
-        setPerMinute(String(r.lateFinePerMinute ?? 0))
-        setMax(String(r.lateFineMax ?? 0))
-      } catch (e) {
-        toast.error(humanizeError(e))
-      } finally {
-        if (alive) setLoading(false)
-      }
-    })()
-    return () => { alive = false }
-  }, [restaurantId])
-
-  const save = async () => {
-    if (!restaurantId) return
-    setSaving(true)
-    try {
-      await updateRestaurant(restaurantId, {
-        lateGraceMinutes: Number(grace) || 0,
-        lateFineFixed: fixed,
-        lateFinePerMinute: perMinute,
-        lateFineMax: max,
-      })
-      toast.success('Правила сохранены')
-      onSaved()
-    } catch (e) {
-      toast.error(humanizeError(e))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Правила опозданий</DialogTitle>
-        </DialogHeader>
-        {loading ? (
-          <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
-        ) : (
-          <div className="space-y-3">
-            <Field label="Допуск, минут" hint="Опоздание в пределах допуска не считается опозданием">
-              <Input value={grace} onChange={(e) => setGrace(e.target.value)} className="w-28" inputMode="numeric" />
-            </Field>
-            <Field label="Фиксированно за опоздание">
-              <Input value={fixed} onChange={(e) => setFixed(e.target.value)} className="w-28" inputMode="decimal" />
-            </Field>
-            <Field label="За каждую минуту сверх допуска">
-              <Input value={perMinute} onChange={(e) => setPerMinute(e.target.value)} className="w-28" inputMode="decimal" />
-            </Field>
-            <Field label="Потолок штрафа" hint="0 — без потолка">
-              <Input value={max} onChange={(e) => setMax(e.target.value)} className="w-28" inputMode="decimal" />
-            </Field>
-            <p className="text-xs text-muted-foreground pt-1">
-              Штраф не списывается сам: система считает сумму, а удерживает её кнопкой человек — время на планшете
-              может сбиться, а уход накануне остаться неотмеченным.
-            </p>
-          </div>
-        )}
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>Отмена</Button>
-          <Button onClick={save} disabled={saving || loading}>
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Сохранить'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div>
-        <div className="text-sm">{label}</div>
-        {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
-      </div>
-      {children}
-    </div>
-  )
-}
-
-/**
- * Миниатюра селфи прихода. Превью приходит вместе с перекличкой (~8 КБ), а
- * оригинал тянется только по клику — иначе список на 20 человек весил бы под
- * мегабайт ради картинок, на которые чаще всего не смотрят.
- */
-function SelfieThumb({ row, onOpen }: { row: RollCallRow; onOpen: () => void }) {
-  if (!row.photoThumb) {
+/** Колонка штрафа: сумма к удержанию, уже удержано, или почему кнопки нет. */
+function FineCell({
+  row, canFine, finesConfigured, busy, onFine, onOpenRules,
+}: {
+  row: RollCallRow
+  canFine: boolean
+  finesConfigured: boolean
+  busy: boolean
+  onFine: () => void
+  onOpenRules: () => void
+}) {
+  if (row.status !== 'late') return <span className="text-muted-foreground">—</span>
+  if (row.fined) {
     return (
-      <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center shrink-0" title="Без снимка">
-        <Camera className="w-4 h-4 text-muted-foreground/60" />
-      </div>
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Удержано
+      </span>
     )
   }
+  if (!finesConfigured) {
+    // Не молчим: без правил кнопки нет, и человек должен понимать почему.
+    return (
+      <button onClick={onOpenRules} className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
+        задать правила
+      </button>
+    )
+  }
+  if (!canFine) {
+    return <span className="text-xs text-muted-foreground">{formatCurrency(Number(row.suggestedFine ?? 0))}</span>
+  }
   return (
-    <button
-      onClick={onOpen}
-      className="w-10 h-10 rounded-full overflow-hidden shrink-0 ring-1 ring-border hover:ring-primary transition"
-      title="Показать снимок"
-    >
-      <img
-        src={`data:image/jpeg;base64,${row.photoThumb}`}
-        alt={`Отметка: ${row.userName}`}
-        className="w-full h-full object-cover"
-      />
-    </button>
-  )
-}
-
-/** Оригинал снимка. Живёт на кассе филиала — если она выключена, останется превью. */
-function SelfieDialog({ row, onClose }: { row: RollCallRow; onClose: () => void }) {
-  const [url, setUrl] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!row.entryId) return
-    let objectUrl: string | null = null
-    let alive = true
-    void (async () => {
-      try {
-        const u = await fetchAttendancePhoto(row.entryId!, 'in')
-        objectUrl = u
-        if (alive) setUrl(u)
-      } catch (e) {
-        if (alive) setError(e instanceof Error ? e.message : 'Снимок недоступен')
-      }
-    })()
-    // Отзываем object URL: без этого каждый просмотр оставлял бы блоб
-    // висеть в памяти вкладки до перезагрузки.
-    return () => { alive = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
-  }, [row.entryId])
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>
-            {row.userName} · {row.clockIn ? timeOf(row.clockIn) : '—'}
-          </DialogTitle>
-        </DialogHeader>
-        {error ? (
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">{error}</p>
-            {row.photoThumb && (
-              <img
-                src={`data:image/jpeg;base64,${row.photoThumb}`}
-                alt=""
-                className="rounded-lg w-full max-w-[240px] mx-auto"
-              />
-            )}
-          </div>
-        ) : url ? (
-          <img src={url} alt={`Отметка: ${row.userName}`} className="rounded-lg w-full" />
-        ) : (
-          <div className="flex justify-center py-10">
-            <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
+    <Button variant="outline" size="sm" disabled={busy} onClick={onFine}>
+      {busy
+        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+        : <>Удержать {formatCurrency(Number(row.suggestedFine ?? 0))}</>}
+    </Button>
   )
 }
 
@@ -644,6 +587,102 @@ function Stat({ label, value, tone, icon }: { label: string; value: number; tone
       <div className="text-xs text-muted-foreground flex items-center gap-1.5">{icon}{label}</div>
       <div className={`text-2xl font-semibold ${tone ?? ''}`}>{value}</div>
     </div>
+  )
+}
+
+/**
+ * Миниатюра селфи прихода. Превью приходит вместе с перекличкой (~8 КБ), а
+ * оригинал тянется только по клику — иначе список на 20 человек весил бы под
+ * мегабайт ради картинок, на которые чаще всего не смотрят.
+ */
+function SelfieThumb({ row }: { row: RollCallRow }) {
+  if (!row.photoThumb) {
+    return (
+      <span className="w-10 h-10 rounded-full bg-muted flex items-center justify-center shrink-0">
+        <Camera className="w-4 h-4 text-muted-foreground/60" />
+      </span>
+    )
+  }
+  return (
+    <span className="w-10 h-10 rounded-full overflow-hidden shrink-0 ring-1 ring-border group-hover:ring-primary transition block">
+      <img
+        src={`data:image/jpeg;base64,${row.photoThumb}`}
+        alt={`Отметка: ${row.userName}`}
+        className="w-full h-full object-cover"
+      />
+    </span>
+  )
+}
+
+/**
+ * Снимок отметки. Оригинал живёт на кассе филиала — если она выключена,
+ * показываем превью, которое приехало вместе с перекличкой.
+ */
+function SelfieDialog({ row, onClose }: { row: RollCallRow; onClose: () => void }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!row.entryId || !row.photoThumb) return
+    let objectUrl: string | null = null
+    let alive = true
+    void (async () => {
+      try {
+        const u = await fetchAttendancePhoto(row.entryId!, 'in')
+        objectUrl = u
+        if (alive) setUrl(u)
+      } catch (e) {
+        if (alive) setError(e instanceof Error ? e.message : 'Снимок недоступен')
+      }
+    })()
+    // Отзываем object URL: без этого каждый просмотр оставлял бы блоб
+    // висеть в памяти вкладки до перезагрузки.
+    return () => { alive = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [row.entryId, row.photoThumb])
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {row.userName} · {row.clockIn ? timeOf(row.clockIn) : 'без отметки'}
+          </DialogTitle>
+        </DialogHeader>
+
+        {!row.photoThumb ? (
+          // Частый случай, и он не ошибка: терминала может не быть вовсе, а
+          // отметку мог поставить менеджер руками в табеле.
+          <div className="text-center py-8 space-y-2">
+            <Camera className="w-8 h-8 mx-auto text-muted-foreground/50" />
+            <p className="text-sm text-muted-foreground">
+              Снимка нет: отметку поставили без терминала (вручную в табеле) либо у терминала не было камеры.
+            </p>
+          </div>
+        ) : error ? (
+          <div className="space-y-3">
+            <img
+              src={`data:image/jpeg;base64,${row.photoThumb}`}
+              alt=""
+              className="rounded-lg w-full max-w-[240px] mx-auto"
+            />
+            <p className="text-xs text-muted-foreground text-center">
+              {error}. Показано превью — оригинал хранится на кассе, где сделан снимок.
+            </p>
+          </div>
+        ) : url ? (
+          <img src={url} alt={`Отметка: ${row.userName}`} className="rounded-lg w-full" />
+        ) : (
+          <div className="flex justify-center py-10">
+            <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+          </div>
+        )}
+
+        <div className="text-xs text-muted-foreground">
+          {row.plannedStart ? `По графику ${row.plannedStart}–${row.plannedEnd}` : 'Смена не запланирована'}
+          {row.status === 'late' && row.lateMinutes > 0 ? ` · опоздание ${row.lateMinutes} мин` : ''}
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -859,5 +898,189 @@ function TemplateDialog({ user, viaRelay, onClose, onSaved }: { user: User; viaR
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ─── Диалог: правила опозданий ─────────────────────────────────────────────
+
+/**
+ * Правила опозданий (105). Формула показана явно и пересчитывается на живом
+ * примере: «10 + 2 × 23 = 56 с.» понятнее любого описания, а без примера
+ * человек не видит, во что превращается ставка за минуту на реальном
+ * опоздании.
+ */
+function LateRulesDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const { restaurantId } = useAuth()
+  const [grace, setGrace] = useState('5')
+  const [fixed, setFixed] = useState('0')
+  const [perMinute, setPerMinute] = useState('0')
+  const [max, setMax] = useState('0')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      try {
+        const r = restaurantId ? await fetchRestaurantById(restaurantId) : null
+        if (!alive || !r) return
+        setGrace(String(r.lateGraceMinutes ?? 5))
+        setFixed(String(r.lateFineFixed ?? 0))
+        setPerMinute(String(r.lateFinePerMinute ?? 0))
+        setMax(String(r.lateFineMax ?? 0))
+      } catch (e) {
+        toast.error(humanizeError(e))
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })()
+    return () => { alive = false }
+  }, [restaurantId])
+
+  // Пример на опоздании в 30 минут — типичное «проспал», а не крайний случай.
+  const example = useMemo(() => {
+    const g = Number(grace) || 0
+    const f = Number(fixed) || 0
+    const pm = Number(perMinute) || 0
+    const cap = Number(max) || 0
+    const late = 30
+    const over = Math.max(0, late - g)
+    let sum = over > 0 ? f + pm * over : 0
+    const capped = cap > 0 && sum > cap
+    if (capped) sum = cap
+    return { late, over, sum, capped, configured: f > 0 || pm > 0 }
+  }, [grace, fixed, perMinute, max])
+
+  const save = async () => {
+    if (!restaurantId) return
+    setSaving(true)
+    try {
+      await updateRestaurant(restaurantId, {
+        lateGraceMinutes: Number(grace) || 0,
+        lateFineFixed: fixed,
+        lateFinePerMinute: perMinute,
+        lateFineMax: max,
+      })
+      toast.success('Правила сохранены')
+      onSaved()
+    } catch (e) {
+      toast.error(humanizeError(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Правила опозданий</DialogTitle>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+        ) : (
+          <div className="space-y-4">
+            <div className="rounded-lg bg-muted/50 px-3 py-2.5 text-xs text-muted-foreground">
+              Штраф = <b className="text-foreground">фиксированно</b> + <b className="text-foreground">за минуту</b> × (минуты опоздания − допуск),
+              но не больше потолка.
+            </div>
+
+            <div className="space-y-3">
+              <RuleField
+                label="Допуск"
+                hint="Опоздание в пределах допуска не считается опозданием"
+                suffix="мин"
+                value={grace}
+                onChange={setGrace}
+              />
+              <RuleField
+                label="Фиксированно за опоздание"
+                hint="Разово, за сам факт"
+                suffix="с."
+                value={fixed}
+                onChange={setFixed}
+              />
+              <RuleField
+                label="За каждую минуту сверх допуска"
+                suffix="с."
+                value={perMinute}
+                onChange={setPerMinute}
+              />
+              <RuleField
+                label="Потолок штрафа"
+                hint="0 — без потолка"
+                suffix="с."
+                value={max}
+                onChange={setMax}
+              />
+            </div>
+
+            <div className="rounded-lg border px-3 py-2.5 text-sm">
+              <div className="text-xs text-muted-foreground mb-1">Например, опоздание на {example.late} мин</div>
+              {example.configured ? (
+                <div className="flex items-baseline gap-2">
+                  <span className="text-lg font-semibold">{formatCurrency(example.sum)}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {example.over > 0
+                      ? <>{fixed || 0} + {perMinute || 0} × {example.over} мин{example.capped ? ' → потолок' : ''}</>
+                      : 'в пределах допуска — без штрафа'}
+                  </span>
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">
+                  Суммы не заданы — перекличка будет показывать опоздания, но штрафовать не предложит.
+                </div>
+              )}
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Штраф не списывается сам: система считает сумму, а удерживает её кнопкой человек — время на планшете
+              может сбиться, а уход накануне остаться неотмеченным.
+            </p>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Отмена</Button>
+          <Button onClick={save} disabled={saving || loading}>
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Сохранить'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** Поле правила: подпись слева, число справа, единица прямо в поле. */
+function RuleField({
+  label, hint, suffix, value, onChange,
+}: {
+  label: string
+  hint?: string
+  suffix: string
+  value: string
+  onChange: (v: string) => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div className="min-w-0">
+        <div className="text-sm">{label}</div>
+        {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
+      </div>
+      <div className="relative shrink-0">
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          inputMode="decimal"
+          className="w-32 pr-9 text-right"
+        />
+        {/* Единица внутри поля, а не подписью рядом: иначе непонятно, вводить
+            сомони или проценты, и в узком диалоге подпись уезжает на строку ниже. */}
+        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
+          {suffix}
+        </span>
+      </div>
+    </div>
   )
 }
