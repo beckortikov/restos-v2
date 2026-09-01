@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.restos.checkin.data.attendance.AttendanceApi
 import com.restos.checkin.data.attendance.AttendancePunchDto
 import com.restos.checkin.data.attendance.OnShiftRowDto
+import com.restos.checkin.data.attendance.PinBody
 import com.restos.checkin.data.attendance.PunchBody
 import com.restos.checkin.data.attendance.UndoBody
 import com.restos.core.auth.AuthRepository
@@ -121,6 +122,20 @@ class PunchViewModel @Inject constructor(
             // сломанная камера не повод не пустить человека на смену.
             val photo = runCatching { photoProvider?.invoke() }.getOrNull()
             runCatching { api.punch(PunchBody(pin = pin, photo = photo)) }
+                .recoverCatching { e ->
+                    // Касса старее приложения. APK ставят вручную, а бэк
+                    // обновляется автоапдейтом — рассинхрон здесь норма, и
+                    // до v3.16.373 сервер не умел решать сам, приход это или
+                    // уход: он отвечал «action должен быть in или out».
+                    // Спрашиваем его и повторяем — для сотрудника у стойки
+                    // ничего не меняется.
+                    if (e is ApiException && e.apiError.code == "VALIDATION") {
+                        val who = api.lookup(PinBody(pin))
+                        api.punch(PunchBody(pin = pin, action = who.nextAction, photo = photo))
+                    } else {
+                        throw e
+                    }
+                }
                 .onSuccess { res ->
                     _state.update {
                         it.copy(loading = false, pin = "", step = PunchStep.Done(res))
