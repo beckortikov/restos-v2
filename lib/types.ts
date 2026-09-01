@@ -10,6 +10,7 @@ export type UserRole =
   | 'storekeeper'
   | 'accountant'
   | 'kiosk'
+  | 'checkin'
   | 'other'
 
 export type TableStatus = 'free' | 'occupied' | 'reserved' | 'bill_requested'
@@ -1060,6 +1061,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   storekeeper: 'Кладовщик',
   accountant: 'Бухгалтер',
   kiosk: 'Терминал самозаказа',
+  checkin: 'Терминал учёта времени',
   other: 'Прочий',
 }
 
@@ -1271,6 +1273,12 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, UserPermissions> = {
     actions: {
       'orders.create': true, 'menu.view': true, 'showcase.view': true,
     },
+  },
+  // Терминал прихода/ухода (:checkin) — устройство без присмотра у входа,
+  // прав не имеет вообще (зеркало perms.go).
+  checkin: {
+    nav: [],
+    actions: {},
   },
   other: {
     nav: [],

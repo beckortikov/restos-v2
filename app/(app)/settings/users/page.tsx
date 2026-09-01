@@ -106,7 +106,7 @@ export default function UserPermissionsPage() {
   // Edit permissions inline (staff tab)
   const [editingUserId, setEditingUserId] = useState<string | null>(null)
 
-  const STAFF_ROLES: UserRoleType[] = ['manager', 'waiter', 'cashier', 'cook', 'storekeeper', 'accountant', 'kiosk', 'other']
+  const STAFF_ROLES: UserRoleType[] = ['manager', 'waiter', 'cashier', 'cook', 'storekeeper', 'accountant', 'kiosk', 'checkin', 'other']
 
   const loadEmployees = async () => {
     if (!user?.restaurantId) return
@@ -976,7 +976,7 @@ type AddUserFormProps = {
   branches: Branch[]
 }
 
-const STAFF_ROLES_LIST: UserRoleType[] = ['manager', 'waiter', 'cashier', 'cook', 'storekeeper', 'accountant', 'kiosk', 'other']
+const STAFF_ROLES_LIST: UserRoleType[] = ['manager', 'waiter', 'cashier', 'cook', 'storekeeper', 'accountant', 'kiosk', 'checkin', 'other']
 
 // Используем UNCONTROLLED inputs (defaultValue + native <form> + FormData).
 // Раньше controlled-inputs с useState внутри memo-обёртки в редких случаях

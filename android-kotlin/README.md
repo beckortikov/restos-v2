@@ -105,6 +105,13 @@ Android-планшет для официанта. **Только LAN** к лок
 ./gradlew :app:installDebug
 ```
 
+В репозитории живут пять приложений на общем `:core` (сеть, SSE, auth,
+онбординг): `:app` — официант, `:kds` — кухонный дисплей, `:zakup` —
+закупщик, `:kiosk` — терминал самозаказа, `:checkin` — терминал учёта
+рабочего времени (планшет у служебного входа, отметка прихода/ухода по PIN).
+Собираются той же командой со своим именем модуля, например
+`./gradlew :checkin:assembleDebug`.
+
 API_BASE_URL в `app/build.gradle.kts` — placeholder
 (`http://10.0.2.2:3001/`). Реальный host подменяется
 `HostRedirectInterceptor` из `ServerConfigStore` на каждом запросе.

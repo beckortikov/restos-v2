@@ -27,6 +27,9 @@ const ROLE_HOME: Record<UserRole, string> = {
   // самозаказа), в веб/Electron POS этот PIN не используется — фолбэк
   // на дашборд чисто для типовой полноты Record<UserRole, ...>.
   kiosk: '/dashboard',
+  // checkin — то же самое: PIN терминала учёта времени живёт только в
+  // Android-приложении :checkin.
+  checkin: '/dashboard',
   other: '/dashboard',
 }
 

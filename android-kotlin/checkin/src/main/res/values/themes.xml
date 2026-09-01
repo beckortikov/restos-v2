@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Светлая тема-контейнер окна; UI рисует Compose (CheckinTheme). -->
+    <style name="Theme.RestosCheckin" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F6F8F7</item>
+        <item name="android:statusBarColor">#F6F8F7</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

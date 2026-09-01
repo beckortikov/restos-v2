@@ -2253,7 +2253,7 @@ paths:
                 branch_id: { type: string, format: uuid, description: "Филиал-получатель — тот же account_id, что у central." }
                 name: { type: string }
                 username: { type: string }
-                role: { type: string, enum: [manager, waiter, cashier, cook, storekeeper, accountant, kiosk, other] }
+                role: { type: string, enum: [manager, waiter, cashier, cook, storekeeper, accountant, kiosk, checkin, other] }
                 phone: { type: string }
                 email: { type: string }
                 position: { type: string }
@@ -2299,7 +2299,7 @@ paths:
                 name: { type: string }
                 username: { type: string }
                 pin: { type: string }
-                role: { type: string, enum: [manager, waiter, cashier, cook, storekeeper, accountant, kiosk, other] }
+                role: { type: string, enum: [manager, waiter, cashier, cook, storekeeper, accountant, kiosk, checkin, other] }
                 phone: { type: string }
                 email: { type: string }
                 position: { type: string }

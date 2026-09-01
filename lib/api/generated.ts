@@ -5811,7 +5811,7 @@ export interface paths {
                         name: string;
                         username?: string;
                         /** @enum {string} */
-                        role: "manager" | "waiter" | "cashier" | "cook" | "storekeeper" | "accountant" | "kiosk" | "other";
+                        role: "manager" | "waiter" | "cashier" | "cook" | "storekeeper" | "accountant" | "kiosk" | "checkin" | "other";
                         phone?: string;
                         email?: string;
                         position?: string;
@@ -5894,7 +5894,7 @@ export interface paths {
                         username?: string;
                         pin?: string;
                         /** @enum {string} */
-                        role?: "manager" | "waiter" | "cashier" | "cook" | "storekeeper" | "accountant" | "kiosk" | "other";
+                        role?: "manager" | "waiter" | "cashier" | "cook" | "storekeeper" | "accountant" | "kiosk" | "checkin" | "other";
                         phone?: string;
                         email?: string;
                         position?: string;

@@ -10,7 +10,7 @@ import { logAction } from './audit'
 
 // Без 'owner'/'superadmin' — тот же набор, что STAFF_ROLES_LIST в
 // settings/users/page.tsx: владелец филиала не назначается с центра.
-export type EmployeeRelayRole = 'manager' | 'waiter' | 'cashier' | 'cook' | 'storekeeper' | 'accountant' | 'kiosk' | 'other'
+export type EmployeeRelayRole = 'manager' | 'waiter' | 'cashier' | 'cook' | 'storekeeper' | 'accountant' | 'kiosk' | 'checkin' | 'other'
 
 export interface EmployeeRelayAction {
   id: string
