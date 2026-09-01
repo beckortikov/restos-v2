@@ -323,13 +323,22 @@ private fun PinPad(
                         .heightIn(min = 22.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    state.error?.let {
-                        Text(
-                            it,
-                            color = CheckinColors.Danger,
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                        )
+                    state.error?.let { err ->
+                        // Предупреждение (повтор, «уже отмечено») — янтарное, а
+                        // не красное: иначе человек читает подтверждение как
+                        // сбой и прикладывает PIN снова.
+                        Surface(
+                            shape = RoundedCornerShape(CheckinRadius.tile),
+                            color = if (state.errorIsWarning) CheckinColors.ClockOutSoft else CheckinColors.DangerSoft,
+                        ) {
+                            Text(
+                                err,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                color = if (state.errorIsWarning) CheckinColors.ClockOut else CheckinColors.DangerText,
+                                style = MaterialTheme.typography.bodySmall,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
                     }
                 }
 

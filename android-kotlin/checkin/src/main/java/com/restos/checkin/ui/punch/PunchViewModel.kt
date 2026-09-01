@@ -57,6 +57,12 @@ data class PunchUiState(
     val pin: String = "",
     val loading: Boolean = false,
     val error: String? = null,
+    /**
+     * Не всякий отказ — ошибка. «Отметка уже принята в 09:03» это
+     * подтверждение, и красная плашка тут вредна: человек решает, что не
+     * отметился, и тычет PIN снова, пока сервер держит паузу.
+     */
+    val errorIsWarning: Boolean = false,
     val onShift: List<OnShiftRowDto> = emptyList(),
 )
 
@@ -179,7 +185,7 @@ class PunchViewModel @Inject constructor(
     /** Вернуться к вводу PIN. */
     fun cancel() {
         resetJob?.cancel()
-        _state.update { it.copy(step = PunchStep.Pin, pin = "", error = null, loading = false) }
+        _state.update { it.copy(step = PunchStep.Pin, pin = "", error = null, errorIsWarning = false, loading = false) }
     }
 
     /**
@@ -197,7 +203,7 @@ class PunchViewModel @Inject constructor(
             runCatching { api.undo(UndoBody(entryId)) }
                 .onSuccess {
                     _state.update {
-                        it.copy(loading = false, pin = "", step = PunchStep.Pin, error = "Отметка отменена")
+                        it.copy(loading = false, pin = "", step = PunchStep.Pin, error = "Отметка отменена", errorIsWarning = true)
                     }
                     refreshOnShift()
                 }
@@ -216,13 +222,16 @@ class PunchViewModel @Inject constructor(
     fun dismissResult() = cancel()
 
     private fun failWithPinReset(e: Throwable) {
-        val msg = when (e) {
-            is ApiException -> e.apiError.message
-            else -> "Нет связи с кассой — отметка не сохранена"
-        }
+        val api = e as? ApiException
+        val msg = api?.apiError?.message ?: "Нет связи с кассой — отметка не сохранена"
+        // CONFLICT приходит на повторное прикладывание и на «уже отмечено» —
+        // это состояние, а не поломка.
+        val warning = api?.apiError?.code == "CONFLICT"
         // PIN всегда стираем: оставленные на экране цифры чужого неудачного
         // ввода — это подсказка следующему в очереди.
-        _state.update { it.copy(loading = false, pin = "", step = PunchStep.Pin, error = msg) }
+        _state.update {
+            it.copy(loading = false, pin = "", step = PunchStep.Pin, error = msg, errorIsWarning = warning)
+        }
     }
 
     /**
