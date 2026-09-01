@@ -394,6 +394,28 @@ var backfillRegistry = []backfillEntity{
 			return nil
 		})
 	}},
+	// График смен (102) — план, без которого сетевая перекличка знала бы
+	// только факт.
+	{name: "shift_schedule_templates", run: func(tx *gorm.DB, rid string) (int64, error) {
+		return backfillLoop(tx, "shift_schedule_templates", "restaurant_id = ?", []any{rid}, func(ids []string) error {
+			for _, id := range ids {
+				if err := recordScheduleTemplateRowSync(tx, id); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}},
+	{name: "shift_schedule_days", run: func(tx *gorm.DB, rid string) (int64, error) {
+		return backfillLoop(tx, "shift_schedule_days", "restaurant_id = ?", []any{rid}, func(ids []string) error {
+			for _, id := range ids {
+				if err := recordScheduleDayRowSync(tx, id); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}},
 	{name: "salary_worked_days", run: func(tx *gorm.DB, rid string) (int64, error) {
 		return backfillLoop(tx, "salary_worked_days", "restaurant_id = ?", []any{rid}, func(ids []string) error {
 			rows, err := backfillFetch[models.SalaryWorkedDay](tx, ids)

@@ -3833,6 +3833,68 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AttendanceOnShiftList" } } } }
         "403": { $ref: "#/components/responses/Error" }
+  # ─── Schedule: плановый график смен (102) ───────────────────────────────
+  # План, против которого меряется факт из time_entries. Без него «кто не
+  # пришёл» не вычисляется: отсутствие отметки неотличимо от выходного.
+  /api/v1/schedule:
+    get:
+      tags: [payroll]
+      summary: Развёрнутый график на период (шаблон + переопределения)
+      parameters:
+        - { in: query, name: from, required: true, schema: { type: string, format: date } }
+        - { in: query, name: to, required: true, schema: { type: string, format: date } }
+        - { in: query, name: user_id, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PlannedShiftsList" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/schedule/template:
+    get:
+      tags: [payroll]
+      summary: Недельный шаблон сотрудника
+      parameters:
+        - { in: query, name: user_id, required: true, schema: { type: string, format: uuid } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ScheduleTemplateList" } } } } }
+    put:
+      tags: [payroll]
+      summary: Заменить недельный шаблон целиком
+      description: "PUT-семантика: снятые дни удаляются, иначе снятый из графика вторник продолжал бы требовать явки"
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SetScheduleTemplateInput" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ScheduleTemplateList" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/schedule/day:
+    put:
+      tags: [payroll]
+      summary: Переопределить график на конкретную дату (подмена, отгул)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ScheduleDayInput" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ScheduleDay" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [payroll]
+      summary: Снять переопределение (вернуться к шаблону)
+      parameters:
+        - { in: query, name: user_id, required: true, schema: { type: string, format: uuid } }
+        - { in: query, name: date, required: true, schema: { type: string, format: date } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204": { description: No Content }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/schedule/roll-call:
+    get:
+      tags: [payroll]
+      summary: Перекличка за день — план против факта
+      parameters:
+        - { in: query, name: date, required: true, schema: { type: string, format: date } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RollCallReport" } } } }
+        "400": { $ref: "#/components/responses/Error" }
   # ─── Menu: ModifierGroups ───────────────────────────────────────────────
   /api/v1/menu/modifier-groups:
     get:
@@ -6538,6 +6600,95 @@ components:
           description: "Откуда отметка (101): manual — веб-табель, app — терминал :checkin, hikvision — СКУД"
         created_at: { type: string, format: date-time }
         user_name: { type: string, description: "Проставляется сервером (не колонка БД) — имя сотрудника для табеля/«Кто на смене»" }
+    ScheduleTemplateSlot:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        weekday: { type: integer, minimum: 1, maximum: 7, description: "ISO: 1=понедельник … 7=воскресенье" }
+        starts_at: { type: string, description: "'HH:MM' локального времени ресторана" }
+        ends_at: { type: string }
+    ScheduleTemplateList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/ScheduleTemplateSlot" } }
+        next_cursor: { type: string }
+    SetScheduleTemplateInput:
+      type: object
+      required: [user_id, slots]
+      properties:
+        user_id: { type: string, format: uuid }
+        slots:
+          type: array
+          items:
+            type: object
+            required: [weekday, starts_at, ends_at]
+            properties:
+              weekday: { type: integer, minimum: 1, maximum: 7 }
+              starts_at: { type: string }
+              ends_at: { type: string }
+    ScheduleDay:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        work_date: { type: string, format: date }
+        kind: { type: string, enum: [work, off] }
+        starts_at: { type: string }
+        ends_at: { type: string }
+        note: { type: string }
+    ScheduleDayInput:
+      type: object
+      required: [user_id, date]
+      properties:
+        user_id: { type: string, format: uuid }
+        date: { type: string, format: date }
+        kind: { type: string, enum: [work, off], default: work, description: "off — явный выходной вопреки шаблону; без него отгул неотличим от незаполненного графика" }
+        starts_at: { type: string, description: "обязателен при kind=work" }
+        ends_at: { type: string, description: "обязателен при kind=work" }
+        note: { type: string }
+    PlannedShift:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        user_id: { type: string, format: uuid }
+        user_name: { type: string }
+        starts_at: { type: string }
+        ends_at: { type: string }
+        source: { type: string, enum: [template, override] }
+        is_off: { type: boolean }
+        note: { type: string }
+    PlannedShiftsList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/PlannedShift" } }
+        next_cursor: { type: string }
+    RollCallRow:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        user_name: { type: string }
+        status:
+          type: string
+          enum: [on_time, late, absent, unplanned, off]
+          description: "unplanned — отметился без плана (подмена без записи в графике)"
+        planned_start: { type: string }
+        planned_end: { type: string }
+        clock_in: { type: string, format: date-time }
+        clock_out: { type: string, format: date-time }
+        late_minutes: { type: integer }
+        source: { type: string, enum: [template, override] }
+    RollCallReport:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        timezone: { type: string }
+        planned: { type: integer }
+        present: { type: integer }
+        late: { type: integer }
+        absent: { type: integer }
+        unplanned: { type: integer }
+        rows: { type: array, items: { $ref: "#/components/schemas/RollCallRow" } }
     AttendancePinInput:
       type: object
       required: [pin]

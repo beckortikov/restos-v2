@@ -139,6 +139,7 @@ func NewRouter(deps Deps) http.Handler {
 	budgetSvc := service.NewBudgetService(rep)
 	timeEntriesSvc := service.NewTimeEntriesService(rep)
 	attendanceSvc := service.NewAttendanceService(rep, timeEntriesSvc)
+	scheduleSvc := service.NewScheduleService(rep)
 	modGroupsSvc := service.NewModifierGroupsService(rep)
 	modsSvc := service.NewModifiersService(rep)
 	bundleSlotsSvc := service.NewBundleSlotsService(rep)
@@ -205,6 +206,7 @@ func NewRouter(deps Deps) http.Handler {
 	budgetH := handlers.NewBudget(budgetSvc)
 	timeEntriesH := handlers.NewTimeEntries(timeEntriesSvc)
 	attendanceH := handlers.NewAttendance(attendanceSvc)
+	scheduleH := handlers.NewSchedule(scheduleSvc)
 	modGroupsH := handlers.NewModifierGroups(modGroupsSvc)
 	modsH := handlers.NewModifiers(modsSvc)
 	bundleSlotsH := handlers.NewBundleSlots(bundleSlotsSvc)
@@ -461,6 +463,11 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/time-entries/active", timeEntriesH.Active)
 			// Терминал учёта времени (:checkin) — кто сейчас на смене.
 			g.Get("/attendance/on-shift", attendanceH.OnShift)
+
+			// Плановый график смен (102) + перекличка «план против факта».
+			g.Get("/schedule", scheduleH.Plan)
+			g.Get("/schedule/template", scheduleH.Template)
+			g.Get("/schedule/roll-call", scheduleH.RollCall)
 			g.Get("/waiters/{id}/today-stats", waiterStatsH.TodayStats)
 
 			// Finance: accounts, operations, custom categories, JSON reports, service accrual/payout.
@@ -731,6 +738,11 @@ func NewRouter(deps Deps) http.Handler {
 			// служебной учёткой — отметка не создаёт сессию.
 			g.Post("/attendance/lookup", attendanceH.Lookup)
 			g.Post("/attendance/punch", attendanceH.Punch)
+
+			// График смен: недельный шаблон целиком + переопределения по датам.
+			g.Put("/schedule/template", scheduleH.SetTemplate)
+			g.Put("/schedule/day", scheduleH.SetDay)
+			g.Delete("/schedule/day", scheduleH.DeleteDay)
 
 			// Payroll: ClockIn/ClockOut/Delete.
 			g.Post("/time-entries", timeEntriesH.ClockIn)

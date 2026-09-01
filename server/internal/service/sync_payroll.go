@@ -88,6 +88,60 @@ func recordSalaryDayMultiplierDeleteSync(tx *gorm.DB, id, restaurantID string) e
 	})
 }
 
+// ─── shift_schedule_templates / shift_schedule_days (102) ──────────────────
+// Плановый график тоже уезжает в центр: без него сетевая перекличка знала бы
+// факт, но не план, и «кто не пришёл» по сети не считалось бы — ровно та
+// дыра, ради которой график и заводили.
+//
+// Обе таблицы правятся и удаляются (замена недельного шаблона — это delete
+// старых строк + insert новых), поэтому нужны и update-, и delete-хуки.
+
+func recordScheduleTemplateRowSync(tx *gorm.DB, id string) error {
+	var row models.ShiftScheduleTemplate
+	if err := tx.Where("id = ?", id).First(&row).Error; err != nil {
+		return err
+	}
+	return synclog.Record(tx, synclog.Entry{
+		Entity:       "shift_schedule_templates",
+		RowID:        row.ID,
+		Op:           "update",
+		RestaurantID: row.RestaurantID,
+		Payload:      row,
+	})
+}
+
+func recordScheduleTemplateDeleteSync(tx *gorm.DB, id, restaurantID string) error {
+	return synclog.Record(tx, synclog.Entry{
+		Entity:       "shift_schedule_templates",
+		RowID:        id,
+		Op:           "delete",
+		RestaurantID: &restaurantID,
+	})
+}
+
+func recordScheduleDayRowSync(tx *gorm.DB, id string) error {
+	var row models.ShiftScheduleDay
+	if err := tx.Where("id = ?", id).First(&row).Error; err != nil {
+		return err
+	}
+	return synclog.Record(tx, synclog.Entry{
+		Entity:       "shift_schedule_days",
+		RowID:        row.ID,
+		Op:           "update",
+		RestaurantID: row.RestaurantID,
+		Payload:      row,
+	})
+}
+
+func recordScheduleDayDeleteSync(tx *gorm.DB, id, restaurantID string) error {
+	return synclog.Record(tx, synclog.Entry{
+		Entity:       "shift_schedule_days",
+		RowID:        id,
+		Op:           "delete",
+		RestaurantID: &restaurantID,
+	})
+}
+
 // ─── salary_deductions / salary_advances ────────────────────────────────
 // Обе — create + soft-cancel (cancelled_at/by), НИКОГДА hard delete — сам
 // апдейт (отмена) синкается тем же upsert-вызовом с уже отменённым снапшотом.

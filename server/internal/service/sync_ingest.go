@@ -215,6 +215,10 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 			err = s.applyTimeEntry(ctx, e, updateAll)
 		case "salary_worked_days":
 			err = s.applySalaryWorkedDay(ctx, e, updateAll)
+		case "shift_schedule_templates":
+			err = s.applyScheduleTemplate(ctx, e, updateAll)
+		case "shift_schedule_days":
+			err = s.applyScheduleDay(ctx, e, updateAll)
 		case "salary_day_multipliers":
 			err = s.applySalaryDayMultiplier(ctx, e, updateAll)
 		case "salary_deductions":
@@ -2028,6 +2032,58 @@ func (s *SyncService) applySalaryWorkedDay(ctx context.Context, e SyncEntry, upd
 	}
 	if row.ID == "" {
 		return apperrors.Wrap("VALIDATION", "salary_worked_days payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&row).Error
+	})
+}
+
+// shift_schedule_templates/shift_schedule_days (102) — плановый график. Как и
+// у остальных override-таблиц выше, zero-value ловушки нет: обе модели без
+// bool/int-полей с gorm-дефолтом, которые могли бы прийти нулём из payload.
+
+func (s *SyncService) applyScheduleTemplate(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "shift_schedule_templates delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.ShiftScheduleTemplate{}).Error
+		})
+	}
+	var row models.ShiftScheduleTemplate
+	if err := json.Unmarshal(e.Payload, &row); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid shift_schedule_templates payload", err)
+	}
+	if row.ID == "" {
+		return apperrors.Wrap("VALIDATION", "shift_schedule_templates payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&row).Error
+	})
+}
+
+func (s *SyncService) applyScheduleDay(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "shift_schedule_days delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.ShiftScheduleDay{}).Error
+		})
+	}
+	var row models.ShiftScheduleDay
+	if err := json.Unmarshal(e.Payload, &row); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid shift_schedule_days payload", err)
+	}
+	if row.ID == "" {
+		return apperrors.Wrap("VALIDATION", "shift_schedule_days payload missing id", nil)
 	}
 	conflict := onConflict(updateAll)
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {

@@ -31,6 +31,8 @@ func All() []any {
 		&Asset{}, &Liability{}, &EquityEntry{}, &BudgetLine{},
 		// misc
 		&TimeEntry{}, &IdempotencyKey{}, &PrintJob{},
+		// график смен (102) — план, против которого меряется факт из TimeEntry
+		&ShiftScheduleTemplate{}, &ShiftScheduleDay{},
 		// auth
 		&Session{},
 		// printers (Phase 4.5; 053 — мультистанционная печать)

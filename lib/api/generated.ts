@@ -11156,6 +11156,224 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Развёрнутый график на период (шаблон + переопределения) */
+        get: {
+            parameters: {
+                query: {
+                    from: string;
+                    to: string;
+                    user_id?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PlannedShiftsList"];
+                    };
+                };
+                400: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schedule/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Недельный шаблон сотрудника */
+        get: {
+            parameters: {
+                query: {
+                    user_id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ScheduleTemplateList"];
+                    };
+                };
+            };
+        };
+        /**
+         * Заменить недельный шаблон целиком
+         * @description PUT-семантика: снятые дни удаляются, иначе снятый из графика вторник продолжал бы требовать явки
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SetScheduleTemplateInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ScheduleTemplateList"];
+                    };
+                };
+                400: components["responses"]["Error"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schedule/day": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Переопределить график на конкретную дату (подмена, отгул) */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ScheduleDayInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ScheduleDay"];
+                    };
+                };
+                400: components["responses"]["Error"];
+            };
+        };
+        post?: never;
+        /** Снять переопределение (вернуться к шаблону) */
+        delete: {
+            parameters: {
+                query: {
+                    user_id: string;
+                    date: string;
+                };
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description No Content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schedule/roll-call": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Перекличка за день — план против факта */
+        get: {
+            parameters: {
+                query: {
+                    date: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RollCallReport"];
+                    };
+                };
+                400: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/menu/modifier-groups": {
         parameters: {
             query?: never;
@@ -17429,6 +17647,107 @@ export interface components {
             created_at?: string;
             /** @description Проставляется сервером (не колонка БД) — имя сотрудника для табеля/«Кто на смене» */
             user_name?: string;
+        };
+        ScheduleTemplateSlot: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            user_id?: string;
+            /** @description ISO: 1=понедельник … 7=воскресенье */
+            weekday?: number;
+            /** @description 'HH:MM' локального времени ресторана */
+            starts_at?: string;
+            ends_at?: string;
+        };
+        ScheduleTemplateList: {
+            data?: components["schemas"]["ScheduleTemplateSlot"][];
+            next_cursor?: string;
+        };
+        SetScheduleTemplateInput: {
+            /** Format: uuid */
+            user_id: string;
+            slots: {
+                weekday: number;
+                starts_at: string;
+                ends_at: string;
+            }[];
+        };
+        ScheduleDay: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            user_id?: string;
+            /** Format: date */
+            work_date?: string;
+            /** @enum {string} */
+            kind?: "work" | "off";
+            starts_at?: string;
+            ends_at?: string;
+            note?: string;
+        };
+        ScheduleDayInput: {
+            /** Format: uuid */
+            user_id: string;
+            /** Format: date */
+            date: string;
+            /**
+             * @description off — явный выходной вопреки шаблону; без него отгул неотличим от незаполненного графика
+             * @default work
+             * @enum {string}
+             */
+            kind: "work" | "off";
+            /** @description обязателен при kind=work */
+            starts_at?: string;
+            /** @description обязателен при kind=work */
+            ends_at?: string;
+            note?: string;
+        };
+        PlannedShift: {
+            /** Format: date */
+            date?: string;
+            /** Format: uuid */
+            user_id?: string;
+            user_name?: string;
+            starts_at?: string;
+            ends_at?: string;
+            /** @enum {string} */
+            source?: "template" | "override";
+            is_off?: boolean;
+            note?: string;
+        };
+        PlannedShiftsList: {
+            data?: components["schemas"]["PlannedShift"][];
+            next_cursor?: string;
+        };
+        RollCallRow: {
+            /** Format: uuid */
+            user_id?: string;
+            user_name?: string;
+            /**
+             * @description unplanned — отметился без плана (подмена без записи в графике)
+             * @enum {string}
+             */
+            status?: "on_time" | "late" | "absent" | "unplanned" | "off";
+            planned_start?: string;
+            planned_end?: string;
+            /** Format: date-time */
+            clock_in?: string;
+            /** Format: date-time */
+            clock_out?: string;
+            late_minutes?: number;
+            /** @enum {string} */
+            source?: "template" | "override";
+        };
+        RollCallReport: {
+            /** Format: date */
+            date?: string;
+            timezone?: string;
+            planned?: number;
+            present?: number;
+            late?: number;
+            absent?: number;
+            unplanned?: number;
+            rows?: components["schemas"]["RollCallRow"][];
         };
         AttendancePinInput: {
             /** @description PIN сотрудника (4 цифры) */
