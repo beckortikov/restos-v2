@@ -27,8 +27,10 @@ type attendancePinReq struct {
 }
 
 type attendancePunchReq struct {
-	PIN    string `json:"pin"`
-	Action string `json:"action"` // "in" | "out"
+	PIN string `json:"pin"`
+	// Action необязателен: терминал отмечает в один шаг и сам не знает,
+	// приход это или уход — пусто значит «сервер решает по состоянию смены».
+	Action string `json:"action,omitempty"` // "" | "in" | "out"
 	// Photo — селфи в base64 (JPEG, ~640px). Необязательное: терминал без
 	// камеры или без выданного разрешения продолжает отмечать людей.
 	Photo string `json:"photo,omitempty"`
@@ -92,4 +94,21 @@ func (h *AttendanceHandler) Photo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// Undo — POST /api/v1/attendance/undo {entry_id}: отменить свежую отметку
+// (промах по клавише у стойки). Окно короткое, см. undoWindow.
+func (h *AttendanceHandler) Undo(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		EntryID string `json:"entry_id"`
+	}
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	if err := h.svc.Undo(r.Context(), in.EntryID); err != nil {
+		respond.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -32,6 +32,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +48,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
 import com.restos.checkin.R
 import com.restos.checkin.ui.components.Keypad
 import com.restos.checkin.ui.components.PinDots
@@ -60,6 +64,7 @@ import com.restos.checkin.ui.theme.CheckinRadius
  * цифровой блок) — сотрудник, который уже видел эти экраны, вводит PIN не
  * задумываясь.
  */
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun PinLoginScreen(
     onLoggedIn: () -> Unit,
@@ -69,6 +74,24 @@ fun PinLoginScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val restaurantName by viewModel.restaurantName.collectAsStateWithLifecycle()
     var confirmReset by remember { mutableStateOf(false) }
+
+    // Разрешение на камеру просим ЗДЕСЬ, при установке терминала, пока рядом
+    // стоит тот, кто вправе его дать. На экране отметок системный диалог
+    // всплывал бы перед первым сотрудником в очереди — и почти наверняка был
+    // бы отклонён не глядя.
+    val cameraPermission = rememberPermissionState(android.Manifest.permission.CAMERA)
+    LaunchedEffect(Unit) {
+        if (!cameraPermission.status.isGranted) cameraPermission.launchPermissionRequest()
+    }
+
+    // Отправка на четвёртой цифре: длина PIN фиксирована, отдельное нажатие
+    // «Активировать» ничего не добавляет. Кнопка остаётся — на случай, если
+    // отправка не ушла (нет сети) и нужно повторить.
+    LaunchedEffect(state.pin) {
+        if (state.pin.length == PinLoginViewModel.MAX_PIN && !state.loading) {
+            viewModel.submit(onLoggedIn)
+        }
+    }
 
     if (confirmReset) {
         AlertDialog(
@@ -170,19 +193,28 @@ fun PinLoginScreen(
                     // Место под ошибку зарезервировано, но растёт: отказ по роли —
                     // это три строки текста, а не одна, и он не должен прыгать
                     // клавиатурой вниз.
+                    // Отказ в активации — это инструкция на несколько строк, а
+                    // не «неверный PIN»: рисуем плашкой, чтобы её было видно и
+                    // не спутать с подписью поля.
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 20.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        if (state.error != null) {
-                            Text(
-                                state.error.orEmpty(),
-                                color = CheckinColors.Danger,
-                                style = MaterialTheme.typography.bodySmall,
-                                textAlign = TextAlign.Center,
-                            )
+                        state.error?.let { err ->
+                            Surface(
+                                shape = RoundedCornerShape(CheckinRadius.tile),
+                                color = CheckinColors.DangerSoft,
+                            ) {
+                                Text(
+                                    err,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    color = CheckinColors.DangerText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    textAlign = TextAlign.Center,
+                                )
+                            }
                         }
                     }
 
@@ -232,7 +264,17 @@ fun PinLoginScreen(
                 }
             }
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Активирует управляющий, владелец или учётка с ролью «Терминал учёта времени». " +
+                    "PIN официанта или повара здесь не подойдёт — им отмечаться уже на следующем экране.",
+                modifier = Modifier.widthIn(max = 420.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = CheckinColors.TextTertiary,
+                textAlign = TextAlign.Center,
+            )
+
+            Spacer(Modifier.height(4.dp))
             TextButton(onClick = { confirmReset = true }, enabled = !state.loading) {
                 Text("Сбросить сервер", color = CheckinColors.TextTertiary)
             }

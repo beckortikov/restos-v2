@@ -145,16 +145,21 @@ func (s *AttendanceService) Lookup(ctx context.Context, pin string) (*Attendance
 	return res, nil
 }
 
-// Punch — POST /api/v1/attendance/punch {pin, action}.
+// Punch — POST /api/v1/attendance/punch {pin, action?}.
 //
-// action приходит от клиента и сверяется с фактическим состоянием: между
-// Lookup и подтверждением сотрудник мог отметиться на другом терминале, а
-// двойной тап по кнопке не должен открывать вторую смену.
+// action НЕОБЯЗАТЕЛЕН. Терминал работает в один шаг: ввёл PIN — отметился, без
+// подтверждения на экране, поэтому сторона клиента чаще всего не знает и не
+// должна знать, приход это или уход. Пустой action означает «реши сам по
+// состоянию смены».
+//
+// Если action всё-таки передан (старый клиент, ручной вызов), он сверяется с
+// фактом: между запросами сотрудник мог отметиться на другом терминале, и
+// двойной тап не должен открывать вторую смену.
 func (s *AttendanceService) Punch(ctx context.Context, pin, action, photoB64 string) (*AttendancePunchResult, error) {
 	if err := s.requireTerminal(ctx); err != nil {
 		return nil, err
 	}
-	if action != "in" && action != "out" {
+	if action != "" && action != "in" && action != "out" {
 		return nil, apperrors.Wrap("VALIDATION", "action должен быть in или out", nil)
 	}
 	user, err := s.resolvePIN(ctx, pin)
@@ -175,6 +180,17 @@ func (s *AttendanceService) Punch(ctx context.Context, pin, action, photoB64 str
 	open, err := s.openEntry(ctx, user.ID)
 	if err != nil {
 		return nil, err
+	}
+
+	if action == "" {
+		// Решаем сами: открытая и ещё живая смена значит «уход», всё
+		// остальное — «приход». Брошенная вчерашняя смена (старше
+		// staleShiftAfter) сюда не попадает: человек пришёл сегодня, а не
+		// уходит со вчерашней.
+		action = "in"
+		if open != nil && open.ClockIn != nil && time.Since(*open.ClockIn) < staleShiftAfter {
+			action = "out"
+		}
 	}
 
 	if action == "out" {
@@ -232,6 +248,87 @@ func (s *AttendanceService) Punch(ctx context.Context, pin, action, photoB64 str
 	}
 	res.PhotoSaved = s.savePhoto(actorCtx, created.ID, user.ID, "in", photoB64)
 	return res, nil
+}
+
+// undoWindow — сколько времени даётся на отмену только что сделанной отметки.
+//
+// Терминал отмечает в один шаг, без подтверждения, поэтому промах по клавише
+// и «за меня отметились» надо чем-то лечить. Окно короткое: отмена — это
+// исправление опечатки у стойки, а не инструмент правки табеля задним числом
+// (для этого есть табель у управляющего, где всё видно и логируется).
+const undoWindow = 3 * time.Minute
+
+// Undo — POST /api/v1/attendance/undo {entry_id}: отменить свежую отметку.
+//
+// Приход удаляется целиком (записи не должно было быть), уход откатывается —
+// смена снова становится открытой. Снимок удаляем вместе с приходом: он
+// относился к событию, которого не было.
+func (s *AttendanceService) Undo(ctx context.Context, entryID string) error {
+	if err := s.requireTerminal(ctx); err != nil {
+		return err
+	}
+	if entryID == "" {
+		return apperrors.Wrap("VALIDATION", "entry_id обязателен", nil)
+	}
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return err
+	}
+	var entry models.TimeEntry
+	if err := scoped.Where("id = ?", entryID).First(&entry).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return apperrors.ErrNotFound
+		}
+		return err
+	}
+
+	// Что отменяем — приход или уход — определяется тем, закрыта ли смена.
+	// Свежесть считаем по отменяемому событию, а не по clock_in: у ухода
+	// смена могла начаться восемь часов назад.
+	if entry.ClockOut != nil {
+		if time.Since(*entry.ClockOut) > undoWindow {
+			return apperrors.Wrap("CONFLICT", "отметка уже не отменяется — обратитесь к управляющему", nil)
+		}
+		rid, err := tenant.MustRestaurantID(ctx)
+		if err != nil {
+			return err
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx)
+			if err := tx.Model(&models.TimeEntry{}).
+				Where("id = ? AND restaurant_id = ?", entryID, rid).
+				Updates(map[string]any{
+					"clock_out": nil, "total_hours": 0, "status": "active",
+				}).Error; err != nil {
+				return err
+			}
+			// Снимок ухода больше ни к чему не относится.
+			if err := tx.Where("entry_id = ? AND kind = ?", entryID, "out").
+				Delete(&models.AttendancePhoto{}).Error; err != nil {
+				return err
+			}
+			return recordTimeEntrySync(tx, entryID)
+		})
+	}
+
+	if entry.ClockIn == nil || time.Since(*entry.ClockIn) > undoWindow {
+		return apperrors.Wrap("CONFLICT", "отметка уже не отменяется — обратитесь к управляющему", nil)
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return err
+	}
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Where("entry_id = ?", entryID).Delete(&models.AttendancePhoto{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id = ? AND restaurant_id = ?", entryID, rid).
+			Delete(&models.TimeEntry{}).Error; err != nil {
+			return err
+		}
+		return recordTimeEntryDeleteSync(tx, entryID, rid)
+	})
 }
 
 // OnShift — GET /api/v1/attendance/on-shift: кто сейчас на смене.

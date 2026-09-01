@@ -22,6 +22,9 @@ interface AttendanceApi {
     @POST("api/v1/attendance/punch")
     suspend fun punch(@Body body: PunchBody): AttendancePunchDto
 
+    @POST("api/v1/attendance/undo")
+    suspend fun undo(@Body body: UndoBody)
+
     @GET("api/v1/attendance/on-shift")
     suspend fun onShift(): ListEnvelope<OnShiftRowDto>
 }
@@ -32,10 +35,18 @@ data class PinBody(val pin: String)
 @Serializable
 data class PunchBody(
     val pin: String,
-    val action: String,
+    /**
+     * Приход это или уход, решает СЕРВЕР по состоянию смены: терминал
+     * отмечает в один шаг и знать этого не может. Поле оставлено для
+     * совместимости и не заполняется.
+     */
+    val action: String? = null,
     /** Селфи в base64 (JPEG ~640px). null — камеры нет или кадр не получился. */
     val photo: String? = null,
 )
+
+@Serializable
+data class UndoBody(@SerialName("entry_id") val entryId: String)
 
 @Serializable
 data class AttendanceLookupDto(

@@ -3,11 +3,10 @@ package com.restos.checkin.ui.punch
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.restos.checkin.data.attendance.AttendanceApi
-import com.restos.checkin.data.attendance.AttendanceLookupDto
 import com.restos.checkin.data.attendance.AttendancePunchDto
 import com.restos.checkin.data.attendance.OnShiftRowDto
-import com.restos.checkin.data.attendance.PinBody
 import com.restos.checkin.data.attendance.PunchBody
+import com.restos.checkin.data.attendance.UndoBody
 import com.restos.core.auth.AuthRepository
 import com.restos.core.config.ServerConfigStore
 import com.restos.core.net.ApiException
@@ -24,17 +23,20 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * Шаг терминала. Ввод PIN → подтверждение с именем → результат.
+ * Шаг терминала: ввод PIN → отметка → итог. Два шага, не три.
  *
- * Подтверждение обязательно: без него промах по клавише молча ставил бы чужой
- * приход, и разбираться пришлось бы в конце месяца по табелю.
+ * Подтверждения «это точно вы?» больше нет: у входа очередь, и лишний тап на
+ * каждого человека дважды в день — это и есть та мелочь, из-за которой
+ * терминалом перестают пользоваться. Цена решения — возможность промаха,
+ * поэтому итоговый экран даёт отменить отметку (сервер разрешает это первые
+ * три минуты).
  */
 sealed interface PunchStep {
     /** Ввод PIN. */
     data object Pin : PunchStep
 
-    /** «Вы — Далер, отметить приход?» */
-    data class Confirm(val who: AttendanceLookupDto) : PunchStep
+    /** PIN принят: делаем снимок и отправляем отметку. */
+    data object Working : PunchStep
 
     /** Крупный итог отметки, гаснет сам. */
     data class Done(val result: AttendancePunchDto) : PunchStep
@@ -88,10 +90,9 @@ class PunchViewModel @Inject constructor(
         if (_state.value.loading) return
         val next = (_state.value.pin + digit).take(PIN_LENGTH)
         _state.update { it.copy(pin = next, error = null) }
-        // Автоотправка на четвёртой цифре: отдельная кнопка «Далее» здесь
-        // лишняя — длина PIN фиксирована, и лишний тап у входа в час пик
-        // раздражает больше, чем помогает.
-        if (next.length == PIN_LENGTH) lookup(next)
+        // Отправка на четвёртой цифре: длина PIN фиксирована, и кнопка «Далее»
+        // была бы лишним тапом на каждого человека.
+        if (next.length == PIN_LENGTH) punch(next)
     }
 
     fun backspace() {
@@ -108,28 +109,18 @@ class PunchViewModel @Inject constructor(
 
     // ─── Шаги ──────────────────────────────────────────────────────────────
 
-    private fun lookup(pin: String) {
-        _state.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch {
-            runCatching { api.lookup(PinBody(pin)) }
-                .onSuccess { who ->
-                    _state.update { it.copy(loading = false, step = PunchStep.Confirm(who)) }
-                }
-                .onFailure { e -> failWithPinReset(e) }
-        }
-    }
-
-    /** Подтверждение: отправляем PIN ещё раз — сервер не доверяет user_id с клиента. */
-    fun confirm() {
-        val step = _state.value.step
-        if (step !is PunchStep.Confirm) return
-        val pin = _state.value.pin
-        _state.update { it.copy(loading = true, error = null) }
+    /**
+     * Отметка одним шагом: снимаем кадр и сразу отправляем PIN. Приход это или
+     * уход, решает сервер — терминалу знать неоткуда, а спрашивать человека
+     * значит возвращать тот самый лишний тап.
+     */
+    private fun punch(pin: String) {
+        _state.update { it.copy(loading = true, error = null, step = PunchStep.Working) }
         viewModelScope.launch {
             // Снимок делаем ДО отметки, но его отсутствие её не отменяет:
             // сломанная камера не повод не пустить человека на смену.
             val photo = runCatching { photoProvider?.invoke() }.getOrNull()
-            runCatching { api.punch(PunchBody(pin = pin, action = step.who.nextAction, photo = photo)) }
+            runCatching { api.punch(PunchBody(pin = pin, photo = photo)) }
                 .onSuccess { res ->
                     _state.update {
                         it.copy(loading = false, pin = "", step = PunchStep.Done(res))
@@ -141,10 +132,40 @@ class PunchViewModel @Inject constructor(
         }
     }
 
-    /** Отмена подтверждения — «это не я». */
+    /** Вернуться к вводу PIN. */
     fun cancel() {
         resetJob?.cancel()
         _state.update { it.copy(step = PunchStep.Pin, pin = "", error = null, loading = false) }
+    }
+
+    /**
+     * Отменить только что поставленную отметку — «это не я нажал».
+     * Сервер разрешает отмену первые три минуты; дальше правит управляющий в
+     * табеле, где действие видно и логируется.
+     */
+    fun undo() {
+        val step = _state.value.step
+        if (step !is PunchStep.Done) return
+        val entryId = step.result.entryId
+        resetJob?.cancel()
+        _state.update { it.copy(loading = true) }
+        viewModelScope.launch {
+            runCatching { api.undo(UndoBody(entryId)) }
+                .onSuccess {
+                    _state.update {
+                        it.copy(loading = false, pin = "", step = PunchStep.Pin, error = "Отметка отменена")
+                    }
+                    refreshOnShift()
+                }
+                .onFailure { e ->
+                    val msg = when (e) {
+                        is ApiException -> e.apiError.message
+                        else -> "Не удалось отменить — обратитесь к управляющему"
+                    }
+                    _state.update { it.copy(loading = false, error = msg) }
+                    scheduleReset()
+                }
+        }
     }
 
     /** Ручное закрытие итогового экрана, не дожидаясь автосброса. */

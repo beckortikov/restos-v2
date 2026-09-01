@@ -247,3 +247,80 @@ func TestAttendance_RejectsTerminalPINUnknownPINAndForeignToken(t *testing.T) {
 		t.Fatalf("отклонённые запросы создали %d записей табеля", n)
 	}
 }
+
+// Терминал отмечает в ОДИН шаг: PIN без action. Сервер сам решает, приход это
+// или уход, а свежую отметку можно отменить — подтверждения на экране больше
+// нет, и промах по клавише надо чем-то лечить.
+func TestAttendance_AutoActionAndUndo(t *testing.T) {
+	f := setupE2E(t)
+	gdb := openTestDB(t)
+	tok := seedTerminal(t, f, gdb, "1111")
+
+	waiter, name, pin := "waiter", "Односкоростной", "3344"
+	userID := uuid.NewString()
+	gdb.Create(&models.User{ID: userID, Name: &name, Role: &waiter, PIN: &pin, RestaurantID: &f.rid})
+
+	punch := func() map[string]any {
+		r, b := f.post(t, "/api/v1/attendance/punch", tok, uuid.NewString(), map[string]any{"pin": pin})
+		var out map[string]any
+		_ = json.Unmarshal(b, &out)
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("punch: %d %v", r.StatusCode, out)
+		}
+		return out
+	}
+
+	// Первый PIN без action → приход.
+	first := punch()
+	if first["action"] != "in" {
+		t.Fatalf("первая отметка должна быть приходом: %v", first)
+	}
+	entryID, _ := first["entry_id"].(string)
+
+	// Второй PIN без action → уход той же смены.
+	second := punch()
+	if second["action"] != "out" || second["entry_id"] != entryID {
+		t.Fatalf("вторая отметка должна закрывать ту же смену: %v", second)
+	}
+
+	// Отмена ухода возвращает смену в открытое состояние.
+	r, b := f.post(t, "/api/v1/attendance/undo", tok, uuid.NewString(), map[string]any{"entry_id": entryID})
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("undo ухода: %d %s", r.StatusCode, b)
+	}
+	var entry models.TimeEntry
+	gdb.Where("id = ?", entryID).First(&entry)
+	if entry.ClockOut != nil || entry.Status == nil || *entry.Status != "active" {
+		t.Fatalf("после отмены смена должна быть снова открыта: %+v", entry)
+	}
+
+	// Отмена прихода удаляет запись целиком — её не должно было быть.
+	r, b = f.post(t, "/api/v1/attendance/undo", tok, uuid.NewString(), map[string]any{"entry_id": entryID})
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("undo прихода: %d %s", r.StatusCode, b)
+	}
+	var n int64
+	gdb.Model(&models.TimeEntry{}).Where("id = ?", entryID).Count(&n)
+	if n != 0 {
+		t.Fatalf("запись прихода осталась после отмены")
+	}
+	// Снимок отменённой отметки тоже уходит: он относился к событию, которого
+	// не было.
+	gdb.Model(&models.AttendancePhoto{}).Where("entry_id = ?", entryID).Count(&n)
+	if n != 0 {
+		t.Fatalf("снимок отменённой отметки остался")
+	}
+
+	// Отмена старой отметки запрещена: это исправление опечатки у стойки, а
+	// не правка табеля задним числом.
+	old := time.Now().UTC().Add(-2 * time.Hour)
+	active := "active"
+	oldID := uuid.NewString()
+	gdb.Create(&models.TimeEntry{
+		ID: oldID, UserID: &userID, ClockIn: &old, Status: &active, RestaurantID: &f.rid,
+	})
+	r, _ = f.post(t, "/api/v1/attendance/undo", tok, uuid.NewString(), map[string]any{"entry_id": oldID})
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("отмена старой отметки: ожидали 409, получили %d", r.StatusCode)
+	}
+}

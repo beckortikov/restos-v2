@@ -96,9 +96,15 @@ class PinLoginViewModel @Inject constructor(
                             it.copy(
                                 loading = false,
                                 pin = "",
-                                error = "PIN сотрудника «${user.displayName}» не подходит " +
-                                    "для активации. Нужен PIN учётки с ролью " +
-                                    "«Терминал учёта времени» или управляющего.",
+                                // Говорим не только «нельзя», но и что делать:
+                                // иначе владелец видит отказ на свой рабочий PIN
+                                // и не понимает, чего от него хотят.
+                                error = "PIN сотрудника «${user.displayName}» " +
+                                    "(${roleLabel(user.role)}) не подходит для активации.\n\n" +
+                                    "Терминал активирует управляющий или владелец. " +
+                                    "Чтобы планшет не держал их доступ, заведите сотрудника " +
+                                    "с ролью «Терминал учёта времени» — Настройки → " +
+                                    "Пользователи на кассе — и активируйте его PIN-ом.",
                             )
                         }
                         return@onSuccess
@@ -118,6 +124,20 @@ class PinLoginViewModel @Inject constructor(
     companion object {
         const val MAX_PIN = 4
         const val MIN_PIN_SUBMIT = 4
+
+        /** Роль по-русски — в отказе полезнее «Официант», чем «waiter». */
+        fun roleLabel(role: String): String = when (role) {
+            "owner" -> "Владелец"
+            "manager" -> "Управляющий"
+            "waiter" -> "Официант"
+            "cashier" -> "Кассир"
+            "cook" -> "Повар"
+            "storekeeper" -> "Кладовщик"
+            "accountant" -> "Бухгалтер"
+            "kiosk" -> "Терминал самозаказа"
+            "checkin" -> "Терминал учёта времени"
+            else -> role
+        }
 
         /** Кто может активировать терминал (см. комментарий класса). */
         val ALLOWED_ROLES = setOf("checkin", "manager", "owner")

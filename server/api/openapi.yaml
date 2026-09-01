@@ -3901,6 +3901,30 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/attendance/undo:
+    post:
+      tags: [payroll]
+      summary: Отменить свежую отметку
+      description: >-
+        Подтверждения на терминале нет — отметка ставится сразу после ввода PIN,
+        поэтому промах лечится отменой. Окно 3 минуты: это исправление опечатки
+        у стойки, а не правка табеля задним числом. Приход удаляется целиком,
+        уход откатывается (смена снова открыта); снимок отменённого события
+        удаляется вместе с ним.
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entry_id]
+              properties:
+                entry_id: { type: string, format: uuid }
+      responses:
+        "204": { description: No Content }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: "Отметка старше окна отмены", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
   /api/v1/attendance/photo/{entry_id}:
     get:
       tags: [payroll]
@@ -6820,13 +6844,16 @@ components:
         pin: { type: string, description: "PIN сотрудника (4 цифры)" }
     AttendancePunchInput:
       type: object
-      required: [pin, action]
+      required: [pin]
       properties:
         pin: { type: string }
         action:
           type: string
           enum: [in, out]
-          description: "Сверяется с фактическим состоянием: между lookup и подтверждением сотрудник мог отметиться на другом терминале"
+          description: >-
+            НЕОБЯЗАТЕЛЕН. Терминал отмечает в один шаг и не знает, приход это или
+            уход — пусто значит «сервер решает по состоянию смены». Если передан,
+            сверяется с фактом (защита от двойного тапа и параллельного терминала).
         photo:
           type: string
           description: "Селфи в base64 (JPEG, ~640px, до 512 КБ). Необязательное: терминал без камеры отмечает людей без снимка"

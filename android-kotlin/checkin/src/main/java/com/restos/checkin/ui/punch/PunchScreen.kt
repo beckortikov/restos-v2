@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Login
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Undo
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -59,7 +60,6 @@ import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import com.restos.checkin.camera.SelfieCamera
-import com.restos.checkin.data.attendance.AttendanceLookupDto
 import com.restos.checkin.data.attendance.AttendancePunchDto
 import com.restos.checkin.data.attendance.OnShiftRowDto
 import com.restos.checkin.ui.components.Keypad
@@ -97,8 +97,9 @@ fun PunchScreen(
     var cameraReady by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        // Разрешение спрашиваем один раз при открытии: у планшета один
-        // владелец-установщик, и диалог посреди очереди никому не нужен.
+        // Обычно разрешение уже выдано при активации терминала. Здесь просим
+        // только если его нет: например, приложение поставили поверх старого,
+        // где доступ отзывали.
         if (!cameraPermission.status.isGranted) cameraPermission.launchPermissionRequest()
     }
     LaunchedEffect(cameraPermission.status.isGranted) {
@@ -165,22 +166,15 @@ fun PunchScreen(
                 onSettings = { confirmLogout = true },
             )
 
-            // Подтверждение и итог перекрывают экран целиком: у входа на
-            // планшет смотрят секунду и издалека, поэтому важное — во весь
-            // экран, а не карточкой поверх клавиатуры.
+            // Итог перекрывает экран целиком: у входа на планшет смотрят
+            // секунду и издалека, поэтому важное — во весь экран, а не
+            // карточкой поверх клавиатуры.
             AnimatedVisibility(
-                visible = state.step is PunchStep.Confirm,
+                visible = state.step is PunchStep.Working,
                 enter = fadeIn(),
                 exit = fadeOut(),
             ) {
-                (state.step as? PunchStep.Confirm)?.let { step ->
-                    ConfirmOverlay(
-                        who = step.who,
-                        loading = state.loading,
-                        onConfirm = viewModel::confirm,
-                        onCancel = viewModel::cancel,
-                    )
-                }
+                WorkingOverlay()
             }
             AnimatedVisibility(
                 visible = state.step is PunchStep.Done,
@@ -188,7 +182,12 @@ fun PunchScreen(
                 exit = fadeOut(),
             ) {
                 (state.step as? PunchStep.Done)?.let { step ->
-                    ResultOverlay(result = step.result, onDismiss = viewModel::dismissResult)
+                    ResultOverlay(
+                        result = step.result,
+                        busy = state.loading,
+                        onUndo = viewModel::undo,
+                        onDismiss = viewModel::dismissResult,
+                    )
                 }
             }
         }
@@ -351,104 +350,24 @@ private fun OnShiftStrip(rows: List<OnShiftRowDto>, modifier: Modifier = Modifie
     }
 }
 
-// ─── Подтверждение ─────────────────────────────────────────────────────────
+// ─── Отметка в процессе ────────────────────────────────────────────────────
 
+/**
+ * Полсекунды между PIN и итогом: снимаем кадр и ждём ответ кассы. Показываем
+ * это отдельным экраном, а не спиннером на клавиатуре, — иначе человек успеет
+ * набрать ещё цифру поверх уже отправленного PIN.
+ */
 @Composable
-private fun ConfirmOverlay(
-    who: AttendanceLookupDto,
-    loading: Boolean,
-    onConfirm: () -> Unit,
-    onCancel: () -> Unit,
-) {
-    val isIn = who.nextAction == "in"
-    val accent = if (isIn) CheckinColors.ClockIn else CheckinColors.ClockOut
-
+private fun WorkingOverlay() {
     Surface(modifier = Modifier.fillMaxSize(), color = CheckinColors.Bg) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .systemBarsPadding()
-                .padding(horizontal = 28.dp),
+            modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Text(
-                who.userName,
-                fontSize = 34.sp,
-                fontWeight = FontWeight.Bold,
-                color = CheckinColors.TextPrimary,
-                textAlign = TextAlign.Center,
-            )
-            if (who.position.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Text(who.position, style = MaterialTheme.typography.bodyMedium, color = CheckinColors.TextSecondary)
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            if (!isIn) {
-                Surface(shape = RoundedCornerShape(CheckinRadius.pill), color = CheckinColors.ClockOutSoft) {
-                    Text(
-                        "На смене с ${formatClock(who.onShiftSince)} · ${formatDuration(who.workedMinutes)}",
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = CheckinColors.ClockOut,
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(36.dp))
-
-            Button(
-                onClick = onConfirm,
-                enabled = !loading,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 420.dp)
-                    .height(84.dp),
-                shape = RoundedCornerShape(CheckinRadius.button),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = accent,
-                    contentColor = Color.White,
-                    disabledContainerColor = accent.copy(alpha = 0.5f),
-                    disabledContentColor = Color.White,
-                ),
-            ) {
-                if (loading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = Color.White,
-                        strokeWidth = 2.dp,
-                    )
-                } else {
-                    Icon(
-                        if (isIn) Icons.AutoMirrored.Outlined.Login else Icons.AutoMirrored.Outlined.Logout,
-                        contentDescription = null,
-                        modifier = Modifier.size(26.dp),
-                    )
-                    Spacer(Modifier.size(12.dp))
-                    Text(
-                        if (isIn) "Отметить приход" else "Отметить уход",
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            OutlinedButton(
-                onClick = onCancel,
-                enabled = !loading,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(max = 420.dp)
-                    .height(56.dp),
-                shape = RoundedCornerShape(CheckinRadius.button),
-                border = BorderStroke(1.dp, CheckinColors.Border),
-            ) {
-                Text("Это не я", color = CheckinColors.TextSecondary, fontSize = 17.sp)
-            }
+            CircularProgressIndicator(color = CheckinColors.Primary, strokeWidth = 3.dp)
+            Spacer(Modifier.height(18.dp))
+            Text("Отмечаем…", style = MaterialTheme.typography.titleMedium, color = CheckinColors.TextSecondary)
         }
     }
 }
@@ -456,7 +375,12 @@ private fun ConfirmOverlay(
 // ─── Итог ──────────────────────────────────────────────────────────────────
 
 @Composable
-private fun ResultOverlay(result: AttendancePunchDto, onDismiss: () -> Unit) {
+private fun ResultOverlay(
+    result: AttendancePunchDto,
+    busy: Boolean,
+    onUndo: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val isIn = result.action == "in"
     val accent = if (isIn) CheckinColors.ClockIn else CheckinColors.ClockOut
 
@@ -536,8 +460,28 @@ private fun ResultOverlay(result: AttendancePunchDto, onDismiss: () -> Unit) {
 
             Spacer(Modifier.height(28.dp))
 
-            TextButton(onClick = onDismiss) {
-                Text("Готово", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            // Подтверждения перед отметкой нет — значит должна быть отмена
+            // после неё: промахнулся по клавише или отметился за другого,
+            // исправляется здесь же, пока человек стоит у планшета.
+            OutlinedButton(
+                onClick = onUndo,
+                enabled = !busy,
+                modifier = Modifier.height(52.dp).widthIn(min = 220.dp),
+                shape = RoundedCornerShape(CheckinRadius.button),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.55f)),
+            ) {
+                if (busy) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Outlined.Undo, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.size(8.dp))
+                    Text("Это не я — отменить", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+            TextButton(onClick = onDismiss, enabled = !busy) {
+                Text("Готово", color = Color.White.copy(alpha = 0.85f), fontSize = 15.sp)
             }
         }
     }

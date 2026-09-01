@@ -749,6 +749,7 @@ func NewRouter(deps Deps) http.Handler {
 			// служебной учёткой — отметка не создаёт сессию.
 			g.Post("/attendance/lookup", attendanceH.Lookup)
 			g.Post("/attendance/punch", attendanceH.Punch)
+			g.Post("/attendance/undo", attendanceH.Undo)
 
 			// График смен: недельный шаблон целиком + переопределения по датам.
 			g.Put("/schedule/template", scheduleH.SetTemplate)

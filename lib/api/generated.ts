@@ -11264,6 +11264,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/attendance/undo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Отменить свежую отметку
+         * @description Подтверждения на терминале нет — отметка ставится сразу после ввода PIN, поэтому промах лечится отменой. Окно 3 минуты: это исправление опечатки у стойки, а не правка табеля задним числом. Приход удаляется целиком, уход откатывается (смена снова открыта); снимок отменённого события удаляется вместе с ним.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        entry_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description No Content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["Error"];
+                /** @description Отметка старше окна отмены */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/attendance/photo/{entry_id}": {
         parameters: {
             query?: never;
@@ -18037,10 +18094,10 @@ export interface components {
         AttendancePunchInput: {
             pin: string;
             /**
-             * @description Сверяется с фактическим состоянием: между lookup и подтверждением сотрудник мог отметиться на другом терминале
+             * @description НЕОБЯЗАТЕЛЕН. Терминал отмечает в один шаг и не знает, приход это или уход — пусто значит «сервер решает по состоянию смены». Если передан, сверяется с фактом (защита от двойного тапа и параллельного терминала).
              * @enum {string}
              */
-            action: "in" | "out";
+            action?: "in" | "out";
             /** @description Селфи в base64 (JPEG, ~640px, до 512 КБ). Необязательное: терминал без камеры отмечает людей без снимка */
             photo?: string;
         };
