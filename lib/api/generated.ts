@@ -11028,6 +11028,134 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/attendance/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Кто это по PIN и что ему предложить (приход/уход) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AttendancePinInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AttendanceLookup"];
+                    };
+                };
+                401: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/attendance/punch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Отметить приход или уход */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AttendancePunchInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AttendancePunch"];
+                    };
+                };
+                401: components["responses"]["Error"];
+                403: components["responses"]["Error"];
+                409: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/attendance/on-shift": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Кто сейчас на смене (для экрана терминала) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AttendanceOnShiftList"];
+                    };
+                };
+                403: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/menu/modifier-groups": {
         parameters: {
             query?: never;
@@ -17292,10 +17420,70 @@ export interface components {
             /** @enum {string} */
             status?: "active" | "closed";
             note?: string;
+            /**
+             * @description Откуда отметка (101): manual — веб-табель, app — терминал :checkin, hikvision — СКУД
+             * @enum {string}
+             */
+            source?: "manual" | "app" | "hikvision";
             /** Format: date-time */
             created_at?: string;
             /** @description Проставляется сервером (не колонка БД) — имя сотрудника для табеля/«Кто на смене» */
             user_name?: string;
+        };
+        AttendancePinInput: {
+            /** @description PIN сотрудника (4 цифры) */
+            pin: string;
+        };
+        AttendancePunchInput: {
+            pin: string;
+            /**
+             * @description Сверяется с фактическим состоянием: между lookup и подтверждением сотрудник мог отметиться на другом терминале
+             * @enum {string}
+             */
+            action: "in" | "out";
+        };
+        AttendanceLookup: {
+            /** Format: uuid */
+            user_id?: string;
+            user_name?: string;
+            position?: string;
+            role?: string;
+            /** @enum {string} */
+            next_action?: "in" | "out";
+            /** Format: date-time */
+            on_shift_since?: string;
+            worked_minutes?: number;
+        };
+        AttendancePunch: {
+            /** @enum {string} */
+            action?: "in" | "out";
+            /** Format: uuid */
+            entry_id?: string;
+            /** Format: uuid */
+            user_id?: string;
+            user_name?: string;
+            /** Format: date-time */
+            at?: string;
+            worked_minutes?: number;
+            /**
+             * Format: uuid
+             * @description Брошенная смена, закрытая автоматически при этом приходе (уход не был отмечен) — терминал показывает предупреждение
+             */
+            closed_stale_entry_id?: string;
+        };
+        AttendanceOnShiftRow: {
+            /** Format: uuid */
+            entry_id?: string;
+            /** Format: uuid */
+            user_id?: string;
+            user_name?: string;
+            /** Format: date-time */
+            clock_in?: string;
+            worked_minutes?: number;
+        };
+        AttendanceOnShiftList: {
+            data?: components["schemas"]["AttendanceOnShiftRow"][];
+            next_cursor?: string;
         };
         TimeEntryInput: {
             /**

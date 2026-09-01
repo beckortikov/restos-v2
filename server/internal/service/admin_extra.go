@@ -663,6 +663,10 @@ type TimeEntryInput struct {
 	BreakMinutes *int    `json:"break_minutes,omitempty"`
 	Status       *string `json:"status,omitempty"`
 	Note         *string `json:"note,omitempty"`
+	// Source (101) — заполняет только терминал отметок (AttendanceService).
+	// Веб-табель шлёт nil и получает дефолт колонки 'manual': ручная отметка
+	// менеджера не должна выглядеть как факт прихода.
+	Source *string `json:"source,omitempty"`
 }
 
 type TimeEntriesFilter struct {
@@ -725,6 +729,7 @@ func (s *TimeEntriesService) ClockIn(ctx context.Context, in TimeEntryInput) (*m
 		ClockIn:      &in0,
 		Status:       &active,
 		Note:         in.Note,
+		Source:       in.Source,
 		RestaurantID: &rid,
 		CreatedAt:    now,
 	}

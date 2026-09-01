@@ -103,6 +103,10 @@ var schemaSelfHealStmts = []string{
 	`CREATE INDEX IF NOT EXISTS idx_bundle_slot_options_item ON bundle_slot_options (option_menu_item_id)`,
 	`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS bundle_group_id UUID`,
 	`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS bundle_slot_label TEXT`,
+
+	// 101: источник отметки табеля. Терминал :checkin пишет source на КАЖДОЙ
+	// отметке — без колонки приход сотрудника падает с ошибкой БД.
+	`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'`,
 	`CREATE INDEX IF NOT EXISTS idx_order_items_bundle_group ON order_items (bundle_group_id)`,
 	`CREATE TABLE IF NOT EXISTS salary_deductions (
 		id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

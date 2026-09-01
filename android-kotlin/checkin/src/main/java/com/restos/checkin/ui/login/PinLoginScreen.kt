@@ -48,6 +48,8 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.restos.checkin.R
+import com.restos.checkin.ui.components.Keypad
+import com.restos.checkin.ui.components.PinDots
 import com.restos.checkin.ui.theme.CheckinColors
 import com.restos.checkin.ui.theme.CheckinRadius
 
@@ -236,89 +238,5 @@ fun PinLoginScreen(
             }
             Spacer(Modifier.height(24.dp))
         }
-    }
-}
-
-@Composable
-private fun PinDots(length: Int, max: Int) {
-    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        repeat(max) { i ->
-            val filled = i < length
-            Surface(
-                shape = CircleShape,
-                color = if (filled) CheckinColors.Primary else Color.Transparent,
-                border = if (filled) null else BorderStroke(2.dp, CheckinColors.TextTertiary),
-                modifier = Modifier.size(16.dp),
-                content = {},
-            )
-        }
-    }
-}
-
-@Composable
-private fun Keypad(
-    onDigit: (Char) -> Unit,
-    onClear: () -> Unit,
-    onBackspace: () -> Unit,
-    enabled: Boolean,
-) {
-    val rows = listOf(
-        listOf('1', '2', '3'),
-        listOf('4', '5', '6'),
-        listOf('7', '8', '9'),
-    )
-    Column(
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        rows.forEach { row ->
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                row.forEach { c ->
-                    Key(Modifier.weight(1f), enabled = enabled, onClick = { onDigit(c) }) {
-                        Text(c.toString(), fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = CheckinColors.TextPrimary)
-                    }
-                }
-            }
-        }
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Key(Modifier.weight(1f), enabled = enabled, onClick = onClear) {
-                Text("Очистить", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = CheckinColors.TextSecondary)
-            }
-            Key(Modifier.weight(1f), enabled = enabled, onClick = { onDigit('0') }) {
-                Text("0", fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = CheckinColors.TextPrimary)
-            }
-            Key(Modifier.weight(1f), enabled = enabled, onClick = onBackspace) {
-                Icon(
-                    Icons.AutoMirrored.Outlined.Backspace,
-                    contentDescription = stringResource(R.string.pin_backspace),
-                    tint = CheckinColors.TextSecondary,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun Key(
-    modifier: Modifier,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    content: @Composable () -> Unit,
-) {
-    Surface(
-        modifier = modifier.height(66.dp),
-        shape = RoundedCornerShape(CheckinRadius.tile),
-        color = CheckinColors.SurfaceMuted,
-        onClick = onClick,
-        enabled = enabled,
-    ) {
-        Box(contentAlignment = Alignment.Center) { content() }
     }
 }

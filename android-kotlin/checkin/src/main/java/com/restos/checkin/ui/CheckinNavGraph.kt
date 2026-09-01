@@ -14,14 +14,14 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.restos.checkin.ui.auth.AuthGateViewModel
 import com.restos.checkin.ui.auth.AuthStatus
-import com.restos.checkin.ui.home.HomeScreen
+import com.restos.checkin.ui.punch.PunchScreen
 import com.restos.checkin.ui.login.PinLoginScreen
 import com.restos.checkin.ui.onboarding.OnboardingScreen
 
 object Routes {
     const val ONBOARDING = "onboarding"
     const val LOGIN = "login"
-    const val HOME = "home"
+    const val PUNCH = "punch"
 }
 
 @Composable
@@ -40,7 +40,7 @@ fun CheckinNavGraph(
     val navController = rememberNavController()
     val startDestination = when (status) {
         AuthStatus.NeedsOnboarding -> Routes.ONBOARDING
-        AuthStatus.LoggedIn -> Routes.HOME
+        AuthStatus.LoggedIn -> Routes.PUNCH
         else -> Routes.LOGIN
     }
 
@@ -57,7 +57,7 @@ fun CheckinNavGraph(
         composable(Routes.LOGIN) {
             PinLoginScreen(
                 onLoggedIn = {
-                    navController.navigate(Routes.HOME) {
+                    navController.navigate(Routes.PUNCH) {
                         popUpTo(Routes.LOGIN) { inclusive = true }
                     }
                 },
@@ -68,11 +68,11 @@ fun CheckinNavGraph(
                 },
             )
         }
-        composable(Routes.HOME) {
-            HomeScreen(
+        composable(Routes.PUNCH) {
+            PunchScreen(
                 onLoggedOut = {
                     navController.navigate(Routes.LOGIN) {
-                        popUpTo(Routes.HOME) { inclusive = true }
+                        popUpTo(Routes.PUNCH) { inclusive = true }
                     }
                 },
             )

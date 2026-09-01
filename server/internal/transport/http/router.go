@@ -138,6 +138,7 @@ func NewRouter(deps Deps) http.Handler {
 	equitySvc := service.NewEquityService(rep)
 	budgetSvc := service.NewBudgetService(rep)
 	timeEntriesSvc := service.NewTimeEntriesService(rep)
+	attendanceSvc := service.NewAttendanceService(rep, timeEntriesSvc)
 	modGroupsSvc := service.NewModifierGroupsService(rep)
 	modsSvc := service.NewModifiersService(rep)
 	bundleSlotsSvc := service.NewBundleSlotsService(rep)
@@ -203,6 +204,7 @@ func NewRouter(deps Deps) http.Handler {
 	equityH := handlers.NewEquity(equitySvc)
 	budgetH := handlers.NewBudget(budgetSvc)
 	timeEntriesH := handlers.NewTimeEntries(timeEntriesSvc)
+	attendanceH := handlers.NewAttendance(attendanceSvc)
 	modGroupsH := handlers.NewModifierGroups(modGroupsSvc)
 	modsH := handlers.NewModifiers(modsSvc)
 	bundleSlotsH := handlers.NewBundleSlots(bundleSlotsSvc)
@@ -457,6 +459,8 @@ func NewRouter(deps Deps) http.Handler {
 
 			// Time entries / waiter stats extras.
 			g.Get("/time-entries/active", timeEntriesH.Active)
+			// Терминал учёта времени (:checkin) — кто сейчас на смене.
+			g.Get("/attendance/on-shift", attendanceH.OnShift)
 			g.Get("/waiters/{id}/today-stats", waiterStatsH.TodayStats)
 
 			// Finance: accounts, operations, custom categories, JSON reports, service accrual/payout.
@@ -721,6 +725,12 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/budget", budgetH.Create)
 			g.Patch("/budget/{id}", budgetH.Patch)
 			g.Delete("/budget/{id}", budgetH.Delete)
+
+			// Терминал учёта времени (:checkin): сотрудник отмечается своим
+			// PIN, устройство при этом остаётся залогиненным под своей
+			// служебной учёткой — отметка не создаёт сессию.
+			g.Post("/attendance/lookup", attendanceH.Lookup)
+			g.Post("/attendance/punch", attendanceH.Punch)
 
 			// Payroll: ClockIn/ClockOut/Delete.
 			g.Post("/time-entries", timeEntriesH.ClockIn)

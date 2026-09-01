@@ -34,8 +34,13 @@ type TimeEntry struct {
 	TotalHours   decimal.Decimal `gorm:"column:total_hours;type:numeric(14,4);default:0" json:"total_hours"`
 	Status       *string         `gorm:"default:'active'" json:"status"`
 	Note         *string         `json:"note"`
-	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt    time.Time       `json:"created_at"`
+	// Source — откуда отметка (101): manual (веб-табель) | app (терминал
+	// :checkin) | hikvision (СКУД, коннектор впереди). Указатель, а не
+	// строка: у GORM zero-значение "" затирало бы дефолт колонки на
+	// Create — та же грабля, что с bool-полями и default-тегом.
+	Source       *string   `gorm:"column:source;default:'manual'" json:"source,omitempty"`
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time `json:"created_at"`
 	// UserName — НЕ колонка (gorm:"-"), проставляется вручную в
 	// TimeEntriesService.List/ClockIn/ClockOut (JOIN-по-карте, не SQL JOIN —
 	// см. комментарий там). Без имени табель показывал «Неизвестно» на

@@ -3797,6 +3797,42 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TimeEntry" } } } }
         "409": { $ref: "#/components/responses/Error" }
+  # ─── Attendance: терминал учёта времени (:checkin) ──────────────────────
+  # Отметку шлёт УСТРОЙСТВО под своей служебной учёткой (роль checkin), а
+  # сотрудник идентифицируется PIN-ом в теле запроса — отметка не создаёт
+  # сессию и не меняет токен планшета. PIN всегда в body, никогда в query.
+  /api/v1/attendance/lookup:
+    post:
+      tags: [payroll]
+      summary: Кто это по PIN и что ему предложить (приход/уход)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AttendancePinInput" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AttendanceLookup" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/attendance/punch:
+    post:
+      tags: [payroll]
+      summary: Отметить приход или уход
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AttendancePunchInput" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AttendancePunch" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/attendance/on-shift:
+    get:
+      tags: [payroll]
+      summary: Кто сейчас на смене (для экрана терминала)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AttendanceOnShiftList" } } } }
+        "403": { $ref: "#/components/responses/Error" }
   # ─── Menu: ModifierGroups ───────────────────────────────────────────────
   /api/v1/menu/modifier-groups:
     get:
@@ -6496,8 +6532,62 @@ components:
         total_hours: { $ref: "#/components/schemas/Decimal" }
         status: { type: string, enum: [active, closed] }
         note: { type: string }
+        source:
+          type: string
+          enum: [manual, app, hikvision]
+          description: "Откуда отметка (101): manual — веб-табель, app — терминал :checkin, hikvision — СКУД"
         created_at: { type: string, format: date-time }
         user_name: { type: string, description: "Проставляется сервером (не колонка БД) — имя сотрудника для табеля/«Кто на смене»" }
+    AttendancePinInput:
+      type: object
+      required: [pin]
+      properties:
+        pin: { type: string, description: "PIN сотрудника (4 цифры)" }
+    AttendancePunchInput:
+      type: object
+      required: [pin, action]
+      properties:
+        pin: { type: string }
+        action:
+          type: string
+          enum: [in, out]
+          description: "Сверяется с фактическим состоянием: между lookup и подтверждением сотрудник мог отметиться на другом терминале"
+    AttendanceLookup:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        user_name: { type: string }
+        position: { type: string }
+        role: { type: string }
+        next_action: { type: string, enum: [in, out] }
+        on_shift_since: { type: string, format: date-time }
+        worked_minutes: { type: integer }
+    AttendancePunch:
+      type: object
+      properties:
+        action: { type: string, enum: [in, out] }
+        entry_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        user_name: { type: string }
+        at: { type: string, format: date-time }
+        worked_minutes: { type: integer }
+        closed_stale_entry_id:
+          type: string
+          format: uuid
+          description: "Брошенная смена, закрытая автоматически при этом приходе (уход не был отмечен) — терминал показывает предупреждение"
+    AttendanceOnShiftRow:
+      type: object
+      properties:
+        entry_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        user_name: { type: string }
+        clock_in: { type: string, format: date-time }
+        worked_minutes: { type: integer }
+    AttendanceOnShiftList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/AttendanceOnShiftRow" } }
+        next_cursor: { type: string }
     TimeEntryInput:
       type: object
       properties:
