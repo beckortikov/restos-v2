@@ -107,3 +107,13 @@ func (h *ScheduleHandler) FineLate(w http.ResponseWriter, r *http.Request) {
 	}
 	respond.JSON(w, http.StatusCreated, row)
 }
+
+// Journal — GET /api/v1/schedule/journal?date — лента отметок за день.
+func (h *ScheduleHandler) Journal(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.svc.Journal(r.Context(), queryString(r, "date"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList[service.JournalEvent](rows, ""))
+}

@@ -441,18 +441,9 @@ func (s *ScheduleService) planFor(ctx context.Context, days []string, userID str
 	// Имена — одним запросом, JOIN'ом по карте (тот же приём, что
 	// attachUserNames в табеле): уволенные (role='deleted') в график не
 	// попадают, но их прошлые строки остаются видимыми под своим именем.
-	type nameRow struct {
-		ID   string `gorm:"column:id"`
-		Name string `gorm:"column:name"`
-	}
-	var nameRows []nameRow
-	if err := raw.Table("users").Select("id::text AS id, COALESCE(name, username, '') AS name").
-		Where("restaurant_id = ?", rid).Scan(&nameRows).Error; err != nil {
+	names, err := s.userNames(ctx, rid)
+	if err != nil {
 		return nil, nil, err
-	}
-	names := make(map[string]string, len(nameRows))
-	for _, n := range nameRows {
-		names[n.ID] = n.Name
 	}
 
 	byUserWeekday := map[string]models.ShiftScheduleTemplate{}
@@ -517,6 +508,150 @@ func (s *ScheduleService) planFor(ctx context.Context, days []string, userID str
 		}
 	}
 	return out, names, nil
+}
+
+// ─── Журнал отметок ────────────────────────────────────────────────────────
+
+// JournalEvent — одно событие: приход ИЛИ уход.
+//
+// Табель хранит смену одной строкой с двумя концами, а журналу нужны именно
+// события: у прихода и ухода свои время, свой снимок и разный смысл. Поэтому
+// строки разворачиваются здесь, а не на клиенте — иначе каждый экран
+// разворачивал бы их по-своему.
+type JournalEvent struct {
+	EntryID  string    `json:"entry_id"`
+	UserID   string    `json:"user_id"`
+	UserName string    `json:"user_name"`
+	Kind     string    `json:"kind"` // in | out
+	At       time.Time `json:"at"`
+	// Source — откуда отметка (101): app | manual | hikvision. Ручную отметку
+	// менеджера в ленте видно отдельно — у неё не бывает снимка, и это не
+	// повод считать её подозрительной.
+	Source string `json:"source,omitempty"`
+	// PhotoThumb — превью в base64; пусто, если снимка нет.
+	PhotoThumb string `json:"photo_thumb,omitempty"`
+	// LateMinutes — только для прихода и только когда опоздание есть.
+	LateMinutes int `json:"late_minutes,omitempty"`
+}
+
+// Journal — лента отметок за день, свежие сверху.
+func (s *ScheduleService) Journal(ctx context.Context, date string) ([]JournalEvent, error) {
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	d, err := normalizeDate(date)
+	if err != nil {
+		return nil, err
+	}
+	policy := s.loadLatePolicy(ctx, rid)
+
+	// Локальные сутки ресторана: по UTC ночная смена уехала бы в соседний день.
+	dayStart, err := time.ParseInLocation(dateLayout, d, policy.loc)
+	if err != nil {
+		return nil, apperrors.Wrap("VALIDATION", "некорректная дата", err)
+	}
+	dayEnd := dayStart.Add(24 * time.Hour)
+
+	// Берём записи, У КОТОРЫХ в этот день попал хотя бы один конец: смена,
+	// начатая вчера вечером и закрытая сегодня утром, должна дать событие
+	// «уход» в сегодняшней ленте.
+	var rows []models.TimeEntry
+	if err := s.r.Raw().WithContext(ctx).
+		Where(`restaurant_id = ? AND (
+			(clock_in  >= ? AND clock_in  < ?) OR
+			(clock_out >= ? AND clock_out < ?))`,
+			rid, dayStart.UTC(), dayEnd.UTC(), dayStart.UTC(), dayEnd.UTC()).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return []JournalEvent{}, nil
+	}
+
+	names, err := s.userNames(ctx, rid)
+	if err != nil {
+		return nil, err
+	}
+
+	entryIDs := make([]string, 0, len(rows))
+	for i := range rows {
+		entryIDs = append(entryIDs, rows[i].ID)
+	}
+	photos := map[string]models.AttendancePhoto{}
+	if s.photos != nil {
+		if p, err := s.photos.ForEntries(ctx, entryIDs); err == nil {
+			photos = p
+		} else {
+			log.Warn().Err(err).Msg("журнал отметок: превью не подгрузились")
+		}
+	}
+
+	// Опоздания берём из переклички за ту же дату — один расчёт на оба экрана,
+	// иначе лента и перекличка расходились бы в цифрах.
+	late := map[string]int{}
+	if report, err := s.RollCall(ctx, d); err == nil {
+		for _, row := range report.Rows {
+			if row.Status == "late" {
+				late[row.UserID] = row.LateMinutes
+			}
+		}
+	}
+
+	out := make([]JournalEvent, 0, len(rows)*2)
+	add := func(row models.TimeEntry, kind string, at time.Time) {
+		if at.Before(dayStart) || !at.Before(dayEnd) {
+			return
+		}
+		ev := JournalEvent{EntryID: row.ID, Kind: kind, At: at}
+		if row.UserID != nil {
+			ev.UserID = *row.UserID
+			ev.UserName = names[*row.UserID]
+			if kind == "in" {
+				ev.LateMinutes = late[*row.UserID]
+			}
+		}
+		if row.Source != nil {
+			ev.Source = *row.Source
+		}
+		if p, ok := photos[row.ID+"|"+kind]; ok && len(p.Thumb) > 0 {
+			ev.PhotoThumb = base64.StdEncoding.EncodeToString(p.Thumb)
+		}
+		out = append(out, ev)
+	}
+	for i := range rows {
+		if rows[i].ClockIn != nil {
+			add(rows[i], "in", rows[i].ClockIn.In(policy.loc))
+		}
+		if rows[i].ClockOut != nil {
+			add(rows[i], "out", rows[i].ClockOut.In(policy.loc))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	return out, nil
+}
+
+// userNames — карта id→имя одним запросом. JOIN-по-карте, а не SQL JOIN: тот
+// же приём, что в табеле (attachUserNames).
+func (s *ScheduleService) userNames(ctx context.Context, rid string) (map[string]string, error) {
+	type nameRow struct {
+		ID   string `gorm:"column:id"`
+		Name string `gorm:"column:name"`
+	}
+	var rows []nameRow
+	if err := s.r.Raw().WithContext(ctx).Table("users").
+		Select("id::text AS id, COALESCE(name, username, '') AS name").
+		Where("restaurant_id = ?", rid).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, len(rows))
+	for _, r := range rows {
+		m[r.ID] = r.Name
+	}
+	return m, nil
 }
 
 // ─── Перекличка ────────────────────────────────────────────────────────────

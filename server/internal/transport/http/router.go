@@ -475,6 +475,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/schedule", scheduleH.Plan)
 			g.Get("/schedule/template", scheduleH.Template)
 			g.Get("/schedule/roll-call", scheduleH.RollCall)
+			g.Get("/schedule/journal", scheduleH.Journal)
 			g.Get("/waiters/{id}/today-stats", waiterStatsH.TodayStats)
 
 			// Finance: accounts, operations, custom categories, JSON reports, service accrual/payout.

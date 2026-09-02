@@ -4025,6 +4025,19 @@ paths:
         "201": { description: Created — строка salary_deductions, content: { application/json: { schema: { type: object } } } }
         "400": { $ref: "#/components/responses/Error" }
         "409": { description: "Штраф за этот день уже выставлен", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+  /api/v1/schedule/journal:
+    get:
+      tags: [payroll]
+      summary: Лента отметок за день (фотожурнал)
+      description: >-
+        Табель хранит смену одной строкой с двумя концами, лента отдаёт
+        СОБЫТИЯ: у прихода и ухода своё время и свой снимок. Смена, начатая
+        накануне и закрытая утром, даёт событие «уход» в сегодняшней ленте.
+      parameters:
+        - { in: query, name: date, required: true, schema: { type: string, format: date } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/JournalList" } } } }
+        "400": { $ref: "#/components/responses/Error" }
   /api/v1/schedule/roll-call:
     get:
       tags: [payroll]
@@ -6809,6 +6822,22 @@ components:
       type: object
       properties:
         data: { type: array, items: { $ref: "#/components/schemas/PlannedShift" } }
+        next_cursor: { type: string }
+    JournalEvent:
+      type: object
+      properties:
+        entry_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        user_name: { type: string }
+        kind: { type: string, enum: [in, out] }
+        at: { type: string, format: date-time }
+        source: { type: string, enum: [manual, app, hikvision] }
+        photo_thumb: { type: string, description: "Превью снимка в base64; пусто — снимка нет" }
+        late_minutes: { type: integer, description: "Только для прихода и только когда опоздание есть" }
+    JournalList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/JournalEvent" } }
         next_cursor: { type: string }
     RollCallRow:
       type: object

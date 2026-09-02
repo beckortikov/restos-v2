@@ -150,6 +150,40 @@ export async function deleteScheduleDay(userId: string, date: string): Promise<v
   logAction('schedule.day_reset', 'user', userId, `Вернул ${date} к шаблону`)
 }
 
+export type JournalKind = 'in' | 'out'
+
+export interface JournalEvent {
+  entryId: string
+  userId: string
+  userName: string
+  kind: JournalKind
+  at: string
+  /** Откуда отметка: app — терминал, manual — руками в табеле. */
+  source?: string
+  photoThumb?: string
+  lateMinutes: number
+}
+
+/**
+ * Лента отметок за день. Именно события, а не смены: у прихода и ухода своё
+ * время и свой снимок, и разворачивает их сервер — иначе каждый экран
+ * разворачивал бы по-своему.
+ */
+export async function fetchJournal(date: string): Promise<JournalEvent[]> {
+  const res: any = await unwrap(api.GET('/api/v1/schedule/journal', { params: { query: { date } } as any }))
+  const rows: any[] = Array.isArray(res?.data) ? res.data : []
+  return rows.map((r: any) => ({
+    entryId: String(r?.entry_id ?? ''),
+    userId: String(r?.user_id ?? ''),
+    userName: String(r?.user_name ?? ''),
+    kind: r?.kind === 'out' ? 'out' : 'in',
+    at: String(r?.at ?? ''),
+    source: r?.source || undefined,
+    photoThumb: r?.photo_thumb || undefined,
+    lateMinutes: Number(r?.late_minutes ?? 0),
+  }))
+}
+
 export async function fetchRollCall(date: string): Promise<RollCallReport> {
   const res: any = await unwrap(api.GET('/api/v1/schedule/roll-call', { params: { query: { date } } as any }))
   const rows: any[] = Array.isArray(res?.rows) ? res.rows : []

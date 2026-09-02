@@ -11650,6 +11650,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/schedule/journal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Лента отметок за день (фотожурнал)
+         * @description Табель хранит смену одной строкой с двумя концами, лента отдаёт СОБЫТИЯ: у прихода и ухода своё время и свой снимок. Смена, начатая накануне и закрытая утром, даёт событие «уход» в сегодняшней ленте.
+         */
+        get: {
+            parameters: {
+                query: {
+                    date: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["JournalList"];
+                    };
+                };
+                400: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/schedule/roll-call": {
         parameters: {
             query?: never;
@@ -18048,6 +18090,27 @@ export interface components {
         };
         PlannedShiftsList: {
             data?: components["schemas"]["PlannedShift"][];
+            next_cursor?: string;
+        };
+        JournalEvent: {
+            /** Format: uuid */
+            entry_id?: string;
+            /** Format: uuid */
+            user_id?: string;
+            user_name?: string;
+            /** @enum {string} */
+            kind?: "in" | "out";
+            /** Format: date-time */
+            at?: string;
+            /** @enum {string} */
+            source?: "manual" | "app" | "hikvision";
+            /** @description Превью снимка в base64; пусто — снимка нет */
+            photo_thumb?: string;
+            /** @description Только для прихода и только когда опоздание есть */
+            late_minutes?: number;
+        };
+        JournalList: {
+            data?: components["schemas"]["JournalEvent"][];
             next_cursor?: string;
         };
         RollCallRow: {
