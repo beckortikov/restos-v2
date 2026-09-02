@@ -7,6 +7,7 @@ import android.graphics.Matrix
 import android.util.Base64
 import android.util.Size
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
@@ -23,6 +24,9 @@ import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -52,8 +56,19 @@ class SelfieCamera(
     private val lifecycleOwner: LifecycleOwner,
 ) {
     private val executor = Executors.newSingleThreadExecutor()
+    private val analysisExecutor = Executors.newSingleThreadExecutor()
     private var capture: ImageCapture? = null
     private var bound = false
+
+    private val _faceInFrame = MutableStateFlow(false)
+
+    /**
+     * Есть ли лицо в кадре ПРЯМО СЕЙЧАС — по потоку с камеры, а не по
+     * сделанному снимку. Экран показывает это человеку до отметки: иначе он
+     * узнаёт, что не попал в кадр, уже после нажатия, и всё начинается
+     * заново.
+     */
+    val faceInFrame: StateFlow<Boolean> = _faceInFrame.asStateFlow()
 
     /** PreviewView для экрана — человек должен видеть, попал ли он в кадр. */
     val previewView: PreviewView by lazy {
@@ -109,12 +124,30 @@ class SelfieCamera(
                 val preview = Preview.Builder().build().also {
                     it.surfaceProvider = previewView.surfaceProvider
                 }
+                // Анализ потока для живого статуса «лицо в кадре».
+                // KEEP_ONLY_LATEST: детектор медленнее камеры, и очередь
+                // кадров означала бы, что индикатор показывает прошлое.
+                val analysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setResolutionSelector(
+                        ResolutionSelector.Builder()
+                            .setResolutionStrategy(
+                                ResolutionStrategy(
+                                    Size(480, 640),
+                                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
+                                ),
+                            )
+                            .build(),
+                    )
+                    .build()
+                    .also { it.setAnalyzer(analysisExecutor, ::analyzeFrame) }
                 provider.unbindAll()
                 provider.bindToLifecycle(
                     lifecycleOwner,
                     CameraSelector.DEFAULT_FRONT_CAMERA,
                     imageCapture,
                     preview,
+                    analysis,
                 )
                 capture = imageCapture
                 true
@@ -128,10 +161,42 @@ class SelfieCamera(
         }, ContextCompat.getMainExecutor(context))
     }
 
+    /**
+     * Анализ одного кадра потока. Состояние меняем только когда результат
+     * повторился [FACE_STABLE_FRAMES] раз подряд: детектор на дешёвой камере
+     * иногда «моргает», и без сглаживания индикатор дёргался бы между «лицо
+     * в кадре» и «нет» несколько раз в секунду.
+     */
+    @androidx.camera.core.ExperimentalGetImage
+    private fun analyzeFrame(proxy: ImageProxy) {
+        val media = proxy.image
+        if (media == null) { proxy.close(); return }
+        val input = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
+        detector.process(input)
+            .addOnSuccessListener { faces -> onFaceResult(faces.isNotEmpty()) }
+            .addOnCompleteListener { proxy.close() }
+    }
+
+    private var stableCount = 0
+    private var lastSeen = false
+
+    private fun onFaceResult(found: Boolean) {
+        if (found == lastSeen) {
+            stableCount++
+        } else {
+            lastSeen = found
+            stableCount = 1
+        }
+        if (stableCount >= FACE_STABLE_FRAMES && _faceInFrame.value != found) {
+            _faceInFrame.value = found
+        }
+    }
+
     fun stop() {
         runCatching { ProcessCameraProvider.getInstance(context).get().unbindAll() }
         capture = null
         bound = false
+        _faceInFrame.value = false
     }
 
     /**
@@ -264,3 +329,10 @@ private const val CAPTURE_TIMEOUT_MS = 6_000L
 
 /** Детекция на 640px укладывается в десятки миллисекунд; секунда — это уже сбой. */
 private const val DETECT_TIMEOUT_MS = 2_500L
+
+/**
+ * Сколько одинаковых результатов подряд нужно, чтобы поменять индикатор.
+ * Два кадра — это ~150 мс: достаточно, чтобы убрать мигание, и незаметно для
+ * человека, который просто встал перед планшетом.
+ */
+private const val FACE_STABLE_FRAMES = 2

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.restos.checkin.camera.SelfieShot
 import com.restos.checkin.data.attendance.AttendanceApi
+import com.restos.checkin.data.attendance.AttendanceLookupDto
 import com.restos.checkin.data.attendance.AttendancePunchDto
 import com.restos.checkin.data.attendance.OnShiftRowDto
 import com.restos.checkin.data.attendance.PinBody
@@ -37,7 +38,14 @@ sealed interface PunchStep {
     /** Ввод PIN. */
     data object Pin : PunchStep
 
-    /** PIN принят: делаем снимок и отправляем отметку. */
+    /**
+     * PIN принят, человек опознан — показываем видоискатель, имя и что именно
+     * будет отмечено. Отметка уходит сама, как только в кадре появляется
+     * лицо: кнопка остаётся запасным путём, когда камера лица не видит.
+     */
+    data class Ready(val who: AttendanceLookupDto) : PunchStep
+
+    /** Снимаем и отправляем. */
     data object Working : PunchStep
 
     /**
@@ -103,12 +111,12 @@ class PunchViewModel @Inject constructor(
     // ─── Ввод PIN ──────────────────────────────────────────────────────────
 
     fun appendDigit(digit: Char) {
-        if (_state.value.loading) return
+        if (_state.value.loading || _state.value.step !is PunchStep.Pin) return
         val next = (_state.value.pin + digit).take(PIN_LENGTH)
         _state.update { it.copy(pin = next, error = null) }
         // Отправка на четвёртой цифре: длина PIN фиксирована, и кнопка «Далее»
         // была бы лишним тапом на каждого человека.
-        if (next.length == PIN_LENGTH) punch(next)
+        if (next.length == PIN_LENGTH) identify(next)
     }
 
     fun backspace() {
@@ -130,6 +138,22 @@ class PunchViewModel @Inject constructor(
      * уход, решает сервер — терминалу знать неоткуда, а спрашивать человека
      * значит возвращать тот самый лишний тап.
      */
+    /**
+     * Шаг 1: узнаём, кто это и что будет отмечено. Раньше PIN сразу уходил в
+     * отметку, но тогда человек не видел ни своего имени, ни того, попал ли
+     * он в кадр — а снимок обязан содержать лицо, иначе отметка не идёт.
+     */
+    private fun identify(pin: String) {
+        _state.update { it.copy(loading = true, error = null) }
+        viewModelScope.launch {
+            runCatching { api.lookup(PinBody(pin)) }
+                .onSuccess { who ->
+                    _state.update { it.copy(loading = false, step = PunchStep.Ready(who)) }
+                }
+                .onFailure { e -> failWithPinReset(e) }
+        }
+    }
+
     private fun punch(pin: String, requirePhoto: Boolean = true) {
         _state.update { it.copy(loading = true, error = null, step = PunchStep.Working) }
         viewModelScope.launch {
@@ -168,6 +192,22 @@ class PunchViewModel @Inject constructor(
                 }
                 .onFailure { e -> failWithPinReset(e) }
         }
+    }
+
+    /**
+     * Лицо появилось в кадре — отмечаем сами. Экран показывает имя и «сейчас
+     * отметим приход», человек видит себя в видоискателе; нажимать после
+     * этого нечего.
+     */
+    fun onFaceReady() {
+        val step = _state.value.step
+        if (step is PunchStep.Ready && !_state.value.loading) punch(_state.value.pin)
+    }
+
+    /** Кнопка на экране отметки — когда камера лица не видит. */
+    fun punchNow() {
+        val step = _state.value.step
+        if (step is PunchStep.Ready && !_state.value.loading) punch(_state.value.pin, requirePhoto = false)
     }
 
     /** Ещё раз: человек встал в кадр и просит переснять. */

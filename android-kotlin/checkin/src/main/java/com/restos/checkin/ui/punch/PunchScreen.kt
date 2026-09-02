@@ -98,6 +98,14 @@ fun PunchScreen(
     val cameraPermission = rememberPermissionState(android.Manifest.permission.CAMERA)
     val camera = remember { SelfieCamera(context, lifecycleOwner) }
     var cameraReady by remember { mutableStateOf(false) }
+    val faceInFrame by camera.faceInFrame.collectAsStateWithLifecycle()
+
+    // Как только человек попал в кадр — отмечаем сами. Экран уже показывает,
+    // кто он и что будет отмечено, поэтому нажимать нечего; кнопка остаётся
+    // для случая, когда камера лица не находит.
+    LaunchedEffect(faceInFrame, state.step) {
+        if (faceInFrame && state.step is PunchStep.Ready) viewModel.onFaceReady()
+    }
 
     LaunchedEffect(Unit) {
         // Обычно разрешение уже выдано при активации терминала. Здесь просим
@@ -178,6 +186,26 @@ fun PunchScreen(
             // Итог перекрывает экран целиком: у входа на планшет смотрят
             // секунду и издалека, поэтому важное — во весь экран, а не
             // карточкой поверх клавиатуры.
+            AnimatedVisibility(
+                visible = state.step is PunchStep.Ready,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                (state.step as? PunchStep.Ready)?.let { step ->
+                    ReadyOverlay(
+                        who = step.who,
+                        restaurantName = restaurantName,
+                        clockLabel = formatClock(now),
+                        dateLabel = formatToday(now),
+                        faceInFrame = faceInFrame,
+                        cameraReady = cameraReady,
+                        busy = state.loading,
+                        preview = { modifier -> AndroidView(factory = { camera.previewView }, modifier = modifier) },
+                        onPunch = viewModel::punchNow,
+                        onCancel = viewModel::cancel,
+                    )
+                }
+            }
             AnimatedVisibility(
                 visible = state.step is PunchStep.Working,
                 enter = fadeIn(),
