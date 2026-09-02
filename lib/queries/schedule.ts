@@ -194,6 +194,73 @@ export async function fetchTimeReport(from: string, to: string): Promise<TimeRep
   }
 }
 
+// ─── Утверждение табеля (106) ──────────────────────────────────────────────
+
+export interface ApprovalRow {
+  userId: string
+  userName: string
+  approvedDays: number
+  approvedHours: number
+  approvedAccrued: number
+  currentDays: number
+  currentHours: number
+  currentAccrued: number
+  /** Данные разошлись со снимком. Сравнение делает сервер — сравнивать
+   *  деньги в JS нельзя. */
+  changed: boolean
+}
+
+export interface ApprovalStatus {
+  from: string
+  to: string
+  approved: boolean
+  approvedAt?: string
+  approvedByName?: string
+  changedCount: number
+  /** Сумма УТВЕРЖДЁННЫХ начислений, а не пересчитанных сейчас. */
+  totalAccrued: number
+  rows: ApprovalRow[]
+}
+
+function mapApproval(r: any): ApprovalStatus {
+  return {
+    from: String(r?.from ?? ''),
+    to: String(r?.to ?? ''),
+    approved: r?.approved === true,
+    approvedAt: r?.approved_at || undefined,
+    approvedByName: r?.approved_by_name || undefined,
+    changedCount: Number(r?.changed_count ?? 0),
+    totalAccrued: Number(r?.total_accrued ?? 0),
+    rows: (Array.isArray(r?.rows) ? r.rows : []).map((x: any) => ({
+      userId: String(x?.user_id ?? ''),
+      userName: String(x?.user_name ?? ''),
+      approvedDays: Number(x?.approved_days ?? 0),
+      approvedHours: Number(x?.approved_hours ?? 0),
+      approvedAccrued: Number(x?.approved_accrued ?? 0),
+      currentDays: Number(x?.current_days ?? 0),
+      currentHours: Number(x?.current_hours ?? 0),
+      currentAccrued: Number(x?.current_accrued ?? 0),
+      changed: x?.changed === true,
+    })),
+  }
+}
+
+export async function fetchApproval(from: string, to: string): Promise<ApprovalStatus> {
+  const r: any = await unwrap(api.GET('/api/v1/timesheet/approval', { params: { query: { from, to } } as any }))
+  return mapApproval(r)
+}
+
+export async function approveTimesheet(from: string, to: string): Promise<ApprovalStatus> {
+  const r: any = await unwrap(api.POST('/api/v1/timesheet/approval', { body: { from, to } as any }))
+  logAction('timesheet.approve', 'user', undefined, `Утвердил табель ${from} — ${to}`)
+  return mapApproval(r)
+}
+
+export async function cancelApproval(from: string, to: string): Promise<void> {
+  await unwrap(api.POST('/api/v1/timesheet/approval/cancel', { body: { from, to } as any }))
+  logAction('timesheet.approve_cancel', 'user', undefined, `Переоткрыл табель ${from} — ${to}`)
+}
+
 export type JournalKind = 'in' | 'out'
 
 export interface JournalEvent {

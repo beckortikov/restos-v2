@@ -394,6 +394,18 @@ var backfillRegistry = []backfillEntity{
 			return nil
 		})
 	}},
+	// Утверждённый табель (106) — «утверждено» должно значить то же самое и
+	// в центре.
+	{name: "timesheet_approvals", run: func(tx *gorm.DB, rid string) (int64, error) {
+		return backfillLoop(tx, "timesheet_approvals", "restaurant_id = ?", []any{rid}, func(ids []string) error {
+			for _, id := range ids {
+				if err := recordTimesheetApprovalSync(tx, id); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}},
 	// Селфи отметок (103) — превью для сетевой ленты.
 	{name: "attendance_photos", run: func(tx *gorm.DB, rid string) (int64, error) {
 		return backfillLoop(tx, "attendance_photos", "restaurant_id = ?", []any{rid}, func(ids []string) error {

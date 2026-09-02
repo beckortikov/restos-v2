@@ -215,6 +215,8 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 			err = s.applyTimeEntry(ctx, e, updateAll)
 		case "salary_worked_days":
 			err = s.applySalaryWorkedDay(ctx, e, updateAll)
+		case "timesheet_approvals":
+			err = s.applyTimesheetApproval(ctx, e, updateAll)
 		case "attendance_photos":
 			err = s.applyAttendancePhoto(ctx, e, updateAll)
 		case "shift_schedule_templates":
@@ -2049,6 +2051,32 @@ func (s *SyncService) applySalaryWorkedDay(ctx context.Context, e SyncEntry, upd
 // attendance_photos (103) — селфи отметки. Приезжает вместе с превью; path
 // в реплике указывает на файл филиала, которого здесь нет, и это нормально:
 // центр показывает превью, оригинал тянется с самой кассы.
+// timesheet_approvals (106) — снимок утверждённого табеля. Zero-value ловушки
+// нет: Days/Hours/Accrued приходят из payload значениями, а не дефолтами.
+func (s *SyncService) applyTimesheetApproval(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "timesheet_approvals delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.TimesheetApproval{}).Error
+		})
+	}
+	var row models.TimesheetApproval
+	if err := json.Unmarshal(e.Payload, &row); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid timesheet_approvals payload", err)
+	}
+	if row.ID == "" {
+		return apperrors.Wrap("VALIDATION", "timesheet_approvals payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&row).Error
+	})
+}
+
 func (s *SyncService) applyAttendancePhoto(ctx context.Context, e SyncEntry, updateAll bool) error {
 	if e.Op == "delete" {
 		if e.RowID == "" {

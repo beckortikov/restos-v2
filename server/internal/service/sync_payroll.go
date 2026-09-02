@@ -142,6 +142,28 @@ func recordScheduleDayDeleteSync(tx *gorm.DB, id, restaurantID string) error {
 	})
 }
 
+// ─── timesheet_approvals (106) ─────────────────────────────────────────────
+// Снимок утверждённого табеля уезжает в центр вместе с остальным персоналом:
+// владелец сети смотрит ведомости филиалов оттуда, и «утверждено» должно
+// значить то же самое на обоих узлах.
+//
+// Строка правится один раз — при снятии утверждения (cancelled_at), поэтому
+// хватает update-хука: hard delete здесь не бывает.
+
+func recordTimesheetApprovalSync(tx *gorm.DB, id string) error {
+	var row models.TimesheetApproval
+	if err := tx.Where("id = ?", id).First(&row).Error; err != nil {
+		return err
+	}
+	return synclog.Record(tx, synclog.Entry{
+		Entity:       "timesheet_approvals",
+		RowID:        row.ID,
+		Op:           "update",
+		RestaurantID: row.RestaurantID,
+		Payload:      row,
+	})
+}
+
 // ─── attendance_photos (103) ───────────────────────────────────────────────
 // В центр уезжает СТРОКА целиком, включая thumb (~8 КБ) — по нему владелец
 // сети видит, кто отметился, не поднимая касс филиалов. Оригинал (path) в

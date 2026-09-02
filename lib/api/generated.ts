@@ -11650,6 +11650,139 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/timesheet/approval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Что утверждено за период и что с тех пор изменилось */
+        get: {
+            parameters: {
+                query: {
+                    from: string;
+                    to: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApprovalStatus"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Утвердить табель за период
+         * @description Фиксирует по каждому сотруднику дни, часы и начисление на момент нажатия. Начисление хранится СНИМКОМ: правило расчёта со временем меняется (подняли ставку, сменили тип оплаты), и пересчёт старого периода по новым правилам дал бы сумму, которой никогда не выплачивали. Повторное утверждение уже утверждённого периода отклоняется — сначала переоткрытие, чтобы в истории остался след.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: date */
+                        from: string;
+                        /** Format: date */
+                        to: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApprovalStatus"];
+                    };
+                };
+                /** @description Период уже утверждён */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/timesheet/approval/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Переоткрыть период
+         * @description Строки не удаляются, а помечаются снятыми: кто и когда снял утверждение, в споре важнее самого факта снятия.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: date */
+                        from: string;
+                        /** Format: date */
+                        to: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description No Content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/schedule/report": {
         parameters: {
             query?: never;
@@ -18134,6 +18267,33 @@ export interface components {
         PlannedShiftsList: {
             data?: components["schemas"]["PlannedShift"][];
             next_cursor?: string;
+        };
+        ApprovalRow: {
+            /** Format: uuid */
+            user_id?: string;
+            user_name?: string;
+            approved_days?: number;
+            approved_hours?: components["schemas"]["Decimal"];
+            approved_accrued?: components["schemas"]["Decimal"];
+            current_days?: number;
+            current_hours?: components["schemas"]["Decimal"];
+            current_accrued?: components["schemas"]["Decimal"];
+            /** @description Данные разошлись со снимком (сравнение делает сервер — сравнивать деньги в JS нельзя) */
+            changed?: boolean;
+        };
+        ApprovalStatus: {
+            /** Format: date */
+            from?: string;
+            /** Format: date */
+            to?: string;
+            approved?: boolean;
+            /** Format: date-time */
+            approved_at?: string;
+            approved_by_name?: string;
+            changed_count?: number;
+            /** @description Сумма УТВЕРЖДЁННЫХ начислений, не пересчитанных */
+            total_accrued?: components["schemas"]["Decimal"];
+            rows?: components["schemas"]["ApprovalRow"][];
         };
         TimeReport: {
             /** Format: date */

@@ -35,6 +35,8 @@ func All() []any {
 		&ShiftScheduleTemplate{}, &ShiftScheduleDay{},
 		// селфи при отметке (103)
 		&AttendancePhoto{},
+		// утверждение табеля (106)
+		&TimesheetApproval{},
 		// auth
 		&Session{},
 		// printers (Phase 4.5; 053 — мультистанционная печать)

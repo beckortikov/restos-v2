@@ -1,10 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CalendarDays, ClipboardCheck, Images, LineChart, Loader2, SlidersHorizontal } from 'lucide-react'
+import { CalendarDays, ClipboardCheck, Images, LineChart, Lock, SlidersHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { FinanceTabs } from '@/components/finance/finance-tabs'
+import { ApprovalPanel } from '@/components/schedule/approval'
 import { JournalView } from '@/components/schedule/journal'
 import { ReportsView } from '@/components/schedule/reports'
 import { RollCallView } from '@/components/schedule/roll-call'
@@ -27,13 +28,14 @@ import type { User } from '@/lib/types'
  * Пункты «Отметки» и «Отчёты» появятся вместе со своим содержимым — пустая
  * вкладка хуже, чем её отсутствие.
  */
-type Tab = 'overview' | 'timesheet' | 'journal' | 'reports' | 'rules'
+type Tab = 'overview' | 'timesheet' | 'journal' | 'reports' | 'approval' | 'rules'
 
 const TABS: Array<{ key: Tab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { key: 'overview', label: 'Обзор', icon: ClipboardCheck },
   { key: 'timesheet', label: 'Табель', icon: CalendarDays },
   { key: 'journal', label: 'Отметки', icon: Images },
   { key: 'reports', label: 'Отчёты', icon: LineChart },
+  { key: 'approval', label: 'Утверждение', icon: Lock },
   { key: 'rules', label: 'Правила', icon: SlidersHorizontal },
 ]
 
@@ -126,6 +128,7 @@ export default function TimeTrackingPage() {
           {tab === 'timesheet' && 'План, с которым сравниваются отметки прихода'}
           {tab === 'journal' && 'Кто и когда отметился — со снимками'}
           {tab === 'reports' && 'Часы, дисциплина и фонд оплаты за период'}
+          {tab === 'approval' && 'Зафиксировать суммы периода для зарплаты'}
           {tab === 'rules' && 'Как считаются опоздания и штрафы'}
         </p>
       </div>
@@ -168,6 +171,8 @@ export default function TimeTrackingPage() {
       {tab === 'journal' && <JournalView date={journalDate} onDate={setJournalDate} />}
 
       {tab === 'reports' && <ReportsView />}
+
+      {tab === 'approval' && <ApprovalPanel />}
 
       {tab === 'rules' && <RulesPanel />}
     </div>

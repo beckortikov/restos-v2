@@ -115,6 +115,31 @@ type AttendancePhoto struct {
 
 func (AttendancePhoto) TableName() string { return "attendance_photos" }
 
+// TimesheetApproval — снимок табеля за период по одному сотруднику (106).
+//
+// Accrued хранится снимком, хотя его можно пересчитать: правило начисления со
+// временем меняется (подняли ставку, сменили тип оплаты), и пересчёт старого
+// периода по новым правилам дал бы сумму, которой никогда не выплачивали.
+type TimesheetApproval struct {
+	ID             string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	RestaurantID   *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	PeriodFrom     string          `gorm:"column:period_from;type:date" json:"period_from"`
+	PeriodTo       string          `gorm:"column:period_to;type:date" json:"period_to"`
+	UserID         string          `gorm:"column:user_id;type:uuid" json:"user_id"`
+	Days           int             `gorm:"column:days" json:"days"`
+	Hours          decimal.Decimal `gorm:"column:hours;type:numeric(14,4)" json:"hours"`
+	Accrued        decimal.Decimal `gorm:"column:accrued;type:numeric(14,4)" json:"accrued"`
+	ApprovedAt     time.Time       `gorm:"column:approved_at" json:"approved_at"`
+	ApprovedBy     *string         `gorm:"column:approved_by;type:uuid" json:"approved_by,omitempty"`
+	ApprovedByName *string         `gorm:"column:approved_by_name" json:"approved_by_name,omitempty"`
+	CancelledAt    *time.Time      `gorm:"column:cancelled_at" json:"cancelled_at,omitempty"`
+	CancelledBy    *string         `gorm:"column:cancelled_by;type:uuid" json:"cancelled_by,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+func (TimesheetApproval) TableName() string { return "timesheet_approvals" }
+
 // SalaryDayMultiplier — множитель дневной оплаты за конкретный день (066):
 // «две смены в один день» — строка существует, только когда множитель != 1
 // (по умолчанию день = ×1, строки нет — как и SalaryWorkedDay, чистый override).

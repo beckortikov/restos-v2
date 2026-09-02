@@ -211,6 +211,7 @@ func NewRouter(deps Deps) http.Handler {
 	timeEntriesH := handlers.NewTimeEntries(timeEntriesSvc)
 	attendanceH := handlers.NewAttendance(attendanceSvc, attendancePhotos)
 	scheduleH := handlers.NewSchedule(scheduleSvc, salarySvc)
+	timesheetApprovalH := handlers.NewTimesheetApproval(service.NewTimesheetApprovalService(rep, salarySvc))
 	modGroupsH := handlers.NewModifierGroups(modGroupsSvc)
 	modsH := handlers.NewModifiers(modsSvc)
 	bundleSlotsH := handlers.NewBundleSlots(bundleSlotsSvc)
@@ -477,6 +478,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/schedule/roll-call", scheduleH.RollCall)
 			g.Get("/schedule/journal", scheduleH.Journal)
 			g.Get("/schedule/report", scheduleH.Report)
+			g.Get("/timesheet/approval", timesheetApprovalH.Status)
 			g.Get("/waiters/{id}/today-stats", waiterStatsH.TodayStats)
 
 			// Finance: accounts, operations, custom categories, JSON reports, service accrual/payout.
@@ -760,6 +762,10 @@ func NewRouter(deps Deps) http.Handler {
 			// Штраф за опоздание (105): сумму считает сервер по политике
 			// ресторана, человек только подтверждает.
 			g.Post("/schedule/roll-call/fine", scheduleH.FineLate)
+			// Утверждение табеля (106): фиксируем часы и суммы периода, чтобы
+			// ведомость перестала пересчитываться на каждой правке отметки.
+			g.Post("/timesheet/approval", timesheetApprovalH.Approve)
+			g.Post("/timesheet/approval/cancel", timesheetApprovalH.Cancel)
 
 			// Payroll: ClockIn/ClockOut/Delete.
 			g.Post("/time-entries", timeEntriesH.ClockIn)
