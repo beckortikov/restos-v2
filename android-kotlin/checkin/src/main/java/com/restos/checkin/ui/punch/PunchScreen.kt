@@ -171,12 +171,6 @@ fun PunchScreen(
                 dateLabel = formatToday(now),
                 restaurantName = restaurantName,
                 cameraReady = cameraReady,
-                cameraPreview = { modifier ->
-                    // Живое превью нужно ровно потому, что снимок теперь
-                    // обязан содержать лицо: без него человек не знает, попал
-                    // ли он в кадр, и упирается в «встаньте в кадр» вслепую.
-                    AndroidView(factory = { camera.previewView }, modifier = modifier)
-                },
                 onDigit = viewModel::appendDigit,
                 onClear = viewModel::clear,
                 onBackspace = viewModel::backspace,
@@ -253,7 +247,6 @@ private fun PinPad(
     dateLabel: String,
     restaurantName: String?,
     cameraReady: Boolean,
-    cameraPreview: @Composable (Modifier) -> Unit,
     onDigit: (Char) -> Unit,
     onClear: () -> Unit,
     onBackspace: () -> Unit,
@@ -304,17 +297,9 @@ private fun PinPad(
 
         Spacer(Modifier.height(14.dp))
 
-        if (cameraReady) {
-            Surface(
-                modifier = Modifier.size(104.dp),
-                shape = CircleShape,
-                color = CheckinColors.SurfaceMuted,
-                border = BorderStroke(2.dp, CheckinColors.Primary.copy(alpha = 0.35f)),
-            ) {
-                cameraPreview(Modifier.fillMaxSize())
-            }
-            Spacer(Modifier.height(8.dp))
-        }
+        // Превью на этом шаге не показываем: камера появляется следующим
+        // экраном, во весь кадр. Кружок здесь только отвлекал бы от ввода и
+        // заставлял человека позировать раньше времени.
 
         Surface(
             modifier = Modifier
@@ -550,6 +535,15 @@ private fun ResultOverlay(
     onUndo: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // Отсчёт держим здесь, а не во ViewModel: он про этот экран и умирает
+    // вместе с ним.
+    var secondsLeft by remember(result.entryId) { mutableStateOf(RESULT_SECONDS) }
+    LaunchedEffect(result.entryId) {
+        while (secondsLeft > 0) {
+            delay(1_000)
+            secondsLeft--
+        }
+    }
     val isIn = result.action == "in"
     val accent = if (isIn) CheckinColors.ClockIn else CheckinColors.ClockOut
 
@@ -562,12 +556,49 @@ private fun ResultOverlay(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Icon(
-                Icons.Outlined.CheckCircle,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(72.dp),
-            )
+            // Бейдж говорит, ЧТО отметилось. Без него зелёный экран с
+            // галочкой одинаков для прихода и ухода, а перепутать их —
+            // значит испортить смену.
+            Surface(
+                shape = RoundedCornerShape(CheckinRadius.pill),
+                color = Color.White.copy(alpha = 0.16f),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        if (isIn) Icons.AutoMirrored.Outlined.Login else Icons.AutoMirrored.Outlined.Logout,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.size(6.dp))
+                    Text(
+                        if (isIn) "Приход" else "Уход",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            Surface(
+                modifier = Modifier.size(120.dp),
+                shape = CircleShape,
+                color = Color.White.copy(alpha = 0.14f),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Outlined.CheckCircle,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(76.dp),
+                    )
+                }
+            }
             Spacer(Modifier.height(18.dp))
             Text(
                 if (isIn) "Приход отмечен" else "Уход отмечен",
@@ -648,10 +679,19 @@ private fun ResultOverlay(
                 }
             }
 
-            Spacer(Modifier.height(6.dp))
-            TextButton(onClick = onDismiss, enabled = !busy) {
-                Text("Готово", color = Color.White.copy(alpha = 0.85f), fontSize = 15.sp)
-            }
+            Spacer(Modifier.height(8.dp))
+            // Обратный отсчёт вместо кнопки «Готово»: следующий в очереди
+            // должен видеть, что экран освободится сам, и не тянуться к
+            // чужому планшету.
+            Text(
+                if (secondsLeft > 0) "Окно закроется автоматически через $secondsLeft с" else "Закрываем…",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }
+
+/** Сколько секунд висит итоговый экран (совпадает с автосбросом во ViewModel). */
+private const val RESULT_SECONDS = 4
