@@ -262,6 +262,59 @@ func (s *TimesheetApprovalService) Cancel(ctx context.Context, from, to string) 
 	})
 }
 
+// WorkedHoursRow — часы и дни сотрудника за период.
+type WorkedHoursRow struct {
+	UserID string          `json:"user_id"`
+	Hours  decimal.Decimal `json:"hours"`
+	Days   int             `json:"days"`
+}
+
+// WorkedHours — сколько отработал каждый за период.
+//
+// Отдельный лёгкий эндпоинт, а не выжимка из утверждения: список сотрудников
+// открывают часто, а расчёт начисления там тянет за собой авансы, удержания и
+// множители — платить за это ради двух чисел в карточке незачем.
+func (s *TimesheetApprovalService) WorkedHours(ctx context.Context, from, to string) ([]WorkedHoursRow, error) {
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
+	}
+	f, t, err := normalizePeriod(from, to)
+	if err != nil {
+		return nil, err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	type row struct {
+		UserID string  `gorm:"column:user_id"`
+		Hours  float64 `gorm:"column:hours"`
+		Days   int     `gorm:"column:days"`
+	}
+	var rows []row
+	// Дни считаем по РАЗНЫМ датам прихода, а не по числу записей: обед,
+	// разбивающий смену надвое, не должен превращаться в два рабочих дня —
+	// ровно так же это считает начисление дневной оплаты.
+	if err := s.r.Raw().WithContext(ctx).Table("time_entries").
+		Select(`user_id::text AS user_id,
+		        COALESCE(SUM(total_hours), 0)::float8 AS hours,
+		        COUNT(DISTINCT clock_in::date) AS days`).
+		Where(`restaurant_id = ? AND user_id IS NOT NULL
+		       AND clock_in::date >= ?::date AND clock_in::date <= ?::date`, rid, f, t).
+		Group("user_id").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]WorkedHoursRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, WorkedHoursRow{
+			UserID: r.UserID,
+			Hours:  decimal.MustFromString(trimFloat(r.Hours)),
+			Days:   r.Days,
+		})
+	}
+	return out, nil
+}
+
 // hoursByUser — отработанные часы за период по закрытым сменам.
 func (s *TimesheetApprovalService) hoursByUser(ctx context.Context, from, to string) (map[string]decimal.Decimal, error) {
 	rid, err := tenant.MustRestaurantID(ctx)

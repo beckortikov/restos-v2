@@ -16,6 +16,7 @@ import {
 import { fetchUsersByRestaurant, updateUserPermissions, createUserForRestaurant, deleteUser, updateUser, generateUniquePin } from '@/lib/queries'
 import { fetchBranches, fetchNetworkStaff, type Branch, type NetworkStaffMember } from '@/lib/queries/transfers'
 import { requestCreateEmployeeRelay, requestUpdateEmployeeIdentity, type EmployeeRelayRole } from '@/lib/queries/employee-relay'
+import { fetchWorkedHours } from '@/lib/queries/schedule'
 import { useBranchView } from '@/hooks/use-branch-view'
 import { V4Error } from '@/lib/api'
 import { Shield, Save, RotateCcw, Check, Minus, Plus, Trash2, Users, Search, Pencil, Grid3X3, List, X, KeyRound, ChevronsUpDown, Wallet, Network } from 'lucide-react'
@@ -106,6 +107,12 @@ export default function UserPermissionsPage() {
   // Edit permissions inline (staff tab)
   const [editingUserId, setEditingUserId] = useState<string | null>(null)
 
+  // Часы за текущий месяц — из табеля. Показываем прямо в карточке: «сколько
+  // человек отработал» спрашивают чаще, чем открывают отдельный раздел, а
+  // заводить ради этого второй список сотрудников (как в макете) значило бы
+  // держать две правды об одних и тех же людях.
+  const [workedHours, setWorkedHours] = useState<Map<string, { hours: number; days: number }>>(new Map())
+
   const STAFF_ROLES: UserRoleType[] = ['manager', 'waiter', 'cashier', 'cook', 'storekeeper', 'accountant', 'kiosk', 'checkin', 'other']
 
   const loadEmployees = async () => {
@@ -130,6 +137,17 @@ export default function UserPermissionsPage() {
 
   useEffect(() => {
     loadEmployees().then(() => setLoading(false)).catch(() => setLoading(false))
+
+    // Часы за текущий месяц. Ошибку глотаем намеренно: это справка, а роль без
+    // payroll.manage получит 403 — список сотрудников из-за неё падать не
+    // должен.
+    const now = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const month = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`
+    const last = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+    void fetchWorkedHours(`${month}-01`, `${month}-${pad(last)}`)
+      .then(setWorkedHours)
+      .catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -506,7 +524,20 @@ export default function UserPermissionsPage() {
                     <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
                       <span>@{emp.username}</span>
                       {emp.birthDate && <span>{new Date(emp.birthDate).toLocaleDateString('ru', { day: 'numeric', month: 'short', year: 'numeric' })}</span>}
-                      {emp.salary ? <span>{formatCurrency(emp.salary)}</span> : null}
+                      {emp.payType === 'daily' && emp.dailyRate
+                        ? <span>{formatCurrency(emp.dailyRate)} / день</span>
+                        : emp.salary ? <span>{formatCurrency(emp.salary)}</span> : null}
+                      {(() => {
+                        const w = workedHours.get(emp.id)
+                        if (!w || (w.hours === 0 && w.days === 0)) return null
+                        // Часы и дни вместе: у дневной оплаты платят за дни, у
+                        // оклада смотрят на часы — одной цифрой не обойтись.
+                        return (
+                          <span className="text-foreground/80">
+                            {w.days} дн · {w.hours} ч за месяц
+                          </span>
+                        )
+                      })()}
                       {emp.pin && <span className="font-mono bg-primary/10 text-primary px-1.5 py-0.5 rounded">PIN: {emp.pin}</span>}
                     </div>
                   </div>

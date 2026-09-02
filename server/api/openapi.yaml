@@ -4058,6 +4058,34 @@ paths:
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ApprovalStatus" } } } }
         "409": { description: "Период уже утверждён", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+  /api/v1/timesheet/hours:
+    get:
+      tags: [payroll]
+      summary: Часы и дни по каждому сотруднику за период
+      description: >-
+        Лёгкий эндпоинт для карточек сотрудников: расчёт начисления тянет за
+        собой авансы, удержания и множители, и платить за это ради двух чисел
+        незачем. Дни считаются по РАЗНЫМ датам прихода — обед, разбивающий
+        смену надвое, не превращается в два рабочих дня.
+      parameters:
+        - { in: query, name: from, required: true, schema: { type: string, format: date } }
+        - { in: query, name: to, required: true, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        user_id: { type: string, format: uuid }
+                        hours: { $ref: "#/components/schemas/Decimal" }
+                        days: { type: integer }
   /api/v1/timesheet/approval/cancel:
     post:
       tags: [payroll]

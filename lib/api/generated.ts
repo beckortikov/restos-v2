@@ -11733,6 +11733,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/timesheet/hours": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Часы и дни по каждому сотруднику за период
+         * @description Лёгкий эндпоинт для карточек сотрудников: расчёт начисления тянет за собой авансы, удержания и множители, и платить за это ради двух чисел незачем. Дни считаются по РАЗНЫМ датам прихода — обед, разбивающий смену надвое, не превращается в два рабочих дня.
+         */
+        get: {
+            parameters: {
+                query: {
+                    from: string;
+                    to: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data?: {
+                                /** Format: uuid */
+                                user_id?: string;
+                                hours?: components["schemas"]["Decimal"];
+                                days?: number;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/timesheet/approval/cancel": {
         parameters: {
             query?: never;

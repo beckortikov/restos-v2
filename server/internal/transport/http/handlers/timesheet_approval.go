@@ -60,3 +60,13 @@ func (h *TimesheetApprovalHandler) Cancel(w http.ResponseWriter, r *http.Request
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// WorkedHours — GET /api/v1/timesheet/hours?from&to — часы и дни по каждому.
+func (h *TimesheetApprovalHandler) WorkedHours(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.svc.WorkedHours(r.Context(), queryString(r, "from"), queryString(r, "to"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList[service.WorkedHoursRow](rows, ""))
+}

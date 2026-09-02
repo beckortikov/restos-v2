@@ -261,6 +261,27 @@ export async function cancelApproval(from: string, to: string): Promise<void> {
   logAction('timesheet.approve_cancel', 'user', undefined, `Переоткрыл табель ${from} — ${to}`)
 }
 
+export interface WorkedHours {
+  userId: string
+  hours: number
+  days: number
+}
+
+/**
+ * Часы и дни за период по каждому — для карточек сотрудников. Лёгкий вызов:
+ * начисление сюда не считается.
+ */
+export async function fetchWorkedHours(from: string, to: string): Promise<Map<string, WorkedHours>> {
+  const res: any = await unwrap(api.GET('/api/v1/timesheet/hours', { params: { query: { from, to } } as any }))
+  const rows: any[] = Array.isArray(res?.data) ? res.data : []
+  const m = new Map<string, WorkedHours>()
+  rows.forEach((r: any) => {
+    const userId = String(r?.user_id ?? '')
+    if (userId) m.set(userId, { userId, hours: Number(r?.hours ?? 0), days: Number(r?.days ?? 0) })
+  })
+  return m
+}
+
 export type JournalKind = 'in' | 'out'
 
 export interface JournalEvent {
