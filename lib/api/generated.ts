@@ -11650,6 +11650,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/schedule/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Сводка по рабочему времени за период
+         * @description Часы считаются только по ЗАКРЫТЫМ сменам: у открытой нет ухода, и досчитывать её «до сейчас» значило бы показывать цифру, которая растёт сама. Пунктуальность считается от плановых выходов — без графика знаменателя нет. ФОТ берётся из расчёта зарплаты, а не считается заново.
+         */
+        get: {
+            parameters: {
+                query: {
+                    from: string;
+                    to: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TimeReport"];
+                    };
+                };
+                400: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/schedule/journal": {
         parameters: {
             query?: never;
@@ -18091,6 +18134,33 @@ export interface components {
         PlannedShiftsList: {
             data?: components["schemas"]["PlannedShift"][];
             next_cursor?: string;
+        };
+        TimeReport: {
+            /** Format: date */
+            from?: string;
+            /** Format: date */
+            to?: string;
+            total_hours?: number;
+            /** @description Тот же по длине период перед этим — для сравнения «+6%» */
+            prev_total_hours?: number;
+            shifts?: number;
+            avg_shift_hours?: number;
+            planned_count?: number;
+            on_time_count?: number;
+            late_count?: number;
+            absent_count?: number;
+            /** @description Доля пришедших вовремя от тех, кто пришёл, в процентах */
+            punctuality?: number;
+            /** @description 7 значений, начиная с понедельника */
+            hours_by_weekday?: number[];
+            payroll_accrued?: components["schemas"]["Decimal"];
+            top?: {
+                /** Format: uuid */
+                user_id?: string;
+                user_name?: string;
+                position?: string;
+                hours?: number;
+            }[];
         };
         JournalEvent: {
             /** Format: uuid */

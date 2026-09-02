@@ -150,6 +150,50 @@ export async function deleteScheduleDay(userId: string, date: string): Promise<v
   logAction('schedule.day_reset', 'user', userId, `Вернул ${date} к шаблону`)
 }
 
+export interface TimeReport {
+  from: string
+  to: string
+  totalHours: number
+  prevTotalHours: number
+  shifts: number
+  avgShiftHours: number
+  plannedCount: number
+  onTimeCount: number
+  lateCount: number
+  absentCount: number
+  punctuality: number
+  /** 7 значений, начиная с понедельника. */
+  hoursByWeekday: number[]
+  payrollAccrued: number
+  top: Array<{ userId: string; userName: string; position?: string; hours: number }>
+}
+
+export async function fetchTimeReport(from: string, to: string): Promise<TimeReport> {
+  const r: any = await unwrap(api.GET('/api/v1/schedule/report', { params: { query: { from, to } } as any }))
+  const wd: number[] = Array.isArray(r?.hours_by_weekday) ? r.hours_by_weekday.map(Number) : []
+  return {
+    from: String(r?.from ?? from),
+    to: String(r?.to ?? to),
+    totalHours: Number(r?.total_hours ?? 0),
+    prevTotalHours: Number(r?.prev_total_hours ?? 0),
+    shifts: Number(r?.shifts ?? 0),
+    avgShiftHours: Number(r?.avg_shift_hours ?? 0),
+    plannedCount: Number(r?.planned_count ?? 0),
+    onTimeCount: Number(r?.on_time_count ?? 0),
+    lateCount: Number(r?.late_count ?? 0),
+    absentCount: Number(r?.absent_count ?? 0),
+    punctuality: Number(r?.punctuality ?? 0),
+    hoursByWeekday: wd.length === 7 ? wd : new Array(7).fill(0),
+    payrollAccrued: Number(r?.payroll_accrued ?? 0),
+    top: (Array.isArray(r?.top) ? r.top : []).map((t: any) => ({
+      userId: String(t?.user_id ?? ''),
+      userName: String(t?.user_name ?? ''),
+      position: t?.position || undefined,
+      hours: Number(t?.hours ?? 0),
+    })),
+  }
+}
+
 export type JournalKind = 'in' | 'out'
 
 export interface JournalEvent {

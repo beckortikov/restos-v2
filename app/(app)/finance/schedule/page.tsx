@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 
 import { FinanceTabs } from '@/components/finance/finance-tabs'
 import { JournalView } from '@/components/schedule/journal'
+import { ReportsView } from '@/components/schedule/reports'
 import { RollCallView } from '@/components/schedule/roll-call'
 import { RulesPanel } from '@/components/schedule/rules'
 import { WeekGrid } from '@/components/schedule/week-grid'
@@ -26,12 +27,13 @@ import type { User } from '@/lib/types'
  * Пункты «Отметки» и «Отчёты» появятся вместе со своим содержимым — пустая
  * вкладка хуже, чем её отсутствие.
  */
-type Tab = 'overview' | 'timesheet' | 'journal' | 'rules'
+type Tab = 'overview' | 'timesheet' | 'journal' | 'reports' | 'rules'
 
 const TABS: Array<{ key: Tab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { key: 'overview', label: 'Обзор', icon: ClipboardCheck },
   { key: 'timesheet', label: 'Табель', icon: CalendarDays },
   { key: 'journal', label: 'Отметки', icon: Images },
+  { key: 'reports', label: 'Отчёты', icon: LineChart },
   { key: 'rules', label: 'Правила', icon: SlidersHorizontal },
 ]
 
@@ -123,6 +125,7 @@ export default function TimeTrackingPage() {
           {tab === 'overview' && 'Кто вышел, кто опоздал, кого нет'}
           {tab === 'timesheet' && 'План, с которым сравниваются отметки прихода'}
           {tab === 'journal' && 'Кто и когда отметился — со снимками'}
+          {tab === 'reports' && 'Часы, дисциплина и фонд оплаты за период'}
           {tab === 'rules' && 'Как считаются опоздания и штрафы'}
         </p>
       </div>
@@ -163,6 +166,8 @@ export default function TimeTrackingPage() {
       {/* Дата у ленты своя: перекличка смотрит «день целиком», а журнал
           листают по дням, и общая дата заставляла бы их скакать вместе. */}
       {tab === 'journal' && <JournalView date={journalDate} onDate={setJournalDate} />}
+
+      {tab === 'reports' && <ReportsView />}
 
       {tab === 'rules' && <RulesPanel />}
     </div>

@@ -117,3 +117,13 @@ func (h *ScheduleHandler) Journal(w http.ResponseWriter, r *http.Request) {
 	}
 	respond.JSON(w, http.StatusOK, makeList[service.JournalEvent](rows, ""))
 }
+
+// Report — GET /api/v1/schedule/report?from&to — сводка по рабочему времени.
+func (h *ScheduleHandler) Report(w http.ResponseWriter, r *http.Request) {
+	rep, err := h.svc.TimeReport(r.Context(), h.salary, queryString(r, "from"), queryString(r, "to"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, rep)
+}

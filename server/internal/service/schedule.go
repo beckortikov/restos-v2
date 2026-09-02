@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -509,6 +510,203 @@ func (s *ScheduleService) planFor(ctx context.Context, days []string, userID str
 	}
 	return out, names, nil
 }
+
+// ─── Отчёт по рабочему времени ─────────────────────────────────────────────
+
+// TimeReportTop — строка «топ по часам».
+type TimeReportTop struct {
+	UserID   string  `json:"user_id"`
+	UserName string  `json:"user_name"`
+	Position string  `json:"position,omitempty"`
+	Hours    float64 `json:"hours"`
+}
+
+// TimeReport — сводка за период.
+type TimeReport struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	// TotalHours — только по ЗАКРЫТЫМ сменам: у открытой нет ухода, и
+	// досчитывать её «до сейчас» значило бы показывать цифру, которая растёт
+	// сама и не сходится с завтрашним отчётом за тот же период.
+	TotalHours float64 `json:"total_hours"`
+	// PrevTotalHours — тот же по длине период перед этим, для «+6% к прошлому».
+	PrevTotalHours float64 `json:"prev_total_hours"`
+	Shifts         int     `json:"shifts"`
+	AvgShiftHours  float64 `json:"avg_shift_hours"`
+	// Пунктуальность считается от ПЛАНОВЫХ выходов: без графика знаменателя
+	// нет, и проценту неоткуда взяться.
+	PlannedCount int     `json:"planned_count"`
+	OnTimeCount  int     `json:"on_time_count"`
+	LateCount    int     `json:"late_count"`
+	AbsentCount  int     `json:"absent_count"`
+	Punctuality  float64 `json:"punctuality"`
+	// HoursByWeekday — 7 значений, начиная с понедельника.
+	HoursByWeekday []float64       `json:"hours_by_weekday"`
+	PayrollAccrued decimal.Decimal `json:"payroll_accrued"`
+	Top            []TimeReportTop `json:"top"`
+}
+
+// TimeReport — сводка «сколько отработали и как приходили» за период.
+//
+// Считается из тех же time_entries, что и табель: отдельного хранилища
+// агрегатов нет намеренно — иначе правка отметки задним числом расходилась бы
+// с отчётом, и объяснить разницу было бы нечем.
+func (s *ScheduleService) TimeReport(ctx context.Context, salary *SalaryService, from, to string) (*TimeReport, error) {
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	days, err := datesInRange(from, to)
+	if err != nil {
+		return nil, err
+	}
+	policy := s.loadLatePolicy(ctx, rid)
+	rep := &TimeReport{From: days[0], To: days[len(days)-1], HoursByWeekday: make([]float64, 7)}
+
+	start, _ := time.ParseInLocation(dateLayout, days[0], policy.loc)
+	end, _ := time.ParseInLocation(dateLayout, days[len(days)-1], policy.loc)
+	end = end.Add(24 * time.Hour)
+
+	type entryRow struct {
+		UserID  string    `gorm:"column:user_id"`
+		ClockIn time.Time `gorm:"column:clock_in"`
+		Hours   float64   `gorm:"column:hours"`
+	}
+	var entries []entryRow
+	if err := s.r.Raw().WithContext(ctx).Table("time_entries").
+		Select("user_id::text AS user_id, clock_in, COALESCE(total_hours, 0)::float8 AS hours").
+		Where("restaurant_id = ? AND clock_in >= ? AND clock_in < ? AND clock_out IS NOT NULL",
+			rid, start.UTC(), end.UTC()).
+		Scan(&entries).Error; err != nil {
+		return nil, err
+	}
+
+	hoursByUser := map[string]float64{}
+	for _, e := range entries {
+		rep.TotalHours += e.Hours
+		rep.Shifts++
+		hoursByUser[e.UserID] += e.Hours
+		// Понедельник — нулевой: в графике неделя начинается с него, и
+		// сдвигать её ради Go-нумерации (вс=0) значило бы путать читателя.
+		wd := (int(e.ClockIn.In(policy.loc).Weekday()) + 6) % 7
+		rep.HoursByWeekday[wd] += e.Hours
+	}
+	if rep.Shifts > 0 {
+		rep.AvgShiftHours = round1(rep.TotalHours / float64(rep.Shifts))
+	}
+	rep.TotalHours = round1(rep.TotalHours)
+	for i := range rep.HoursByWeekday {
+		rep.HoursByWeekday[i] = round1(rep.HoursByWeekday[i])
+	}
+
+	// Прошлый период той же длины — чтобы «+6%» считался от сопоставимого
+	// отрезка, а не от календарного месяца разной длины.
+	prevEnd := start
+	prevStart := start.AddDate(0, 0, -len(days))
+	var prevHours float64
+	if err := s.r.Raw().WithContext(ctx).Table("time_entries").
+		Select("COALESCE(SUM(total_hours), 0)::float8").
+		Where("restaurant_id = ? AND clock_in >= ? AND clock_in < ? AND clock_out IS NOT NULL",
+			rid, prevStart.UTC(), prevEnd.UTC()).
+		Scan(&prevHours).Error; err == nil {
+		rep.PrevTotalHours = round1(prevHours)
+	}
+
+	// Пунктуальность: план на весь диапазон против первых отметок дня. Один
+	// проход, а не перекличка по каждому дню — иначе месяц стоил бы 30
+	// одинаковых запросов.
+	plan, _, err := s.planFor(ctx, days, "")
+	if err != nil {
+		return nil, err
+	}
+	firstIn := map[string]time.Time{} // user|date → первая отметка
+	for _, e := range entries {
+		local := e.ClockIn.In(policy.loc)
+		key := e.UserID + "|" + local.Format(dateLayout)
+		if prev, ok := firstIn[key]; !ok || local.Before(prev) {
+			firstIn[key] = local
+		}
+	}
+	for _, p := range plan {
+		if p.IsOff || p.StartsAt == "" {
+			continue
+		}
+		rep.PlannedCount++
+		at, came := firstIn[p.UserID+"|"+p.Date]
+		if !came {
+			rep.AbsentCount++
+			continue
+		}
+		if lateMinutes(at, p.Date, p.StartsAt, policy.loc) > policy.graceMinutes {
+			rep.LateCount++
+		} else {
+			rep.OnTimeCount++
+		}
+	}
+	if came := rep.OnTimeCount + rep.LateCount; came > 0 {
+		rep.Punctuality = round1(float64(rep.OnTimeCount) * 100 / float64(came))
+	}
+
+	// ФОТ берём у зарплаты, а не считаем здесь: правило начисления живёт там
+	// (оклад / дневная ставка / гибрид), и второй его экземпляр разошёлся бы
+	// с ведомостью на первой же правке.
+	if salary != nil {
+		if rows, err := salary.SalaryAccrual(ctx, days[0], days[len(days)-1]); err == nil {
+			total := decimal.FromInt(0)
+			for i := range rows {
+				total = decimal.Add(total, rows[i].Accrued)
+			}
+			rep.PayrollAccrued = decimal.Normalize(total)
+		} else {
+			log.Warn().Err(err).Msg("отчёт по времени: ФОТ не посчитан")
+		}
+	}
+
+	names, err := s.userNames(ctx, rid)
+	if err != nil {
+		return nil, err
+	}
+	positions, err := s.userPositions(ctx, rid)
+	if err != nil {
+		return nil, err
+	}
+	for uid, h := range hoursByUser {
+		rep.Top = append(rep.Top, TimeReportTop{
+			UserID: uid, UserName: names[uid], Position: positions[uid], Hours: round1(h),
+		})
+	}
+	sort.Slice(rep.Top, func(i, j int) bool { return rep.Top[i].Hours > rep.Top[j].Hours })
+	if len(rep.Top) > 10 {
+		rep.Top = rep.Top[:10]
+	}
+	return rep, nil
+}
+
+// userPositions — должности одним запросом (для «топа по часам»).
+func (s *ScheduleService) userPositions(ctx context.Context, rid string) (map[string]string, error) {
+	type row struct {
+		ID  string `gorm:"column:id"`
+		Pos string `gorm:"column:pos"`
+	}
+	var rows []row
+	if err := s.r.Raw().WithContext(ctx).Table("users").
+		Select("id::text AS id, COALESCE(position, '') AS pos").
+		Where("restaurant_id = ?", rid).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, len(rows))
+	for _, r := range rows {
+		m[r.ID] = r.Pos
+	}
+	return m, nil
+}
+
+// round1 — один знак после запятой: часы в отчёте читают глазами, а не сверяют
+// до сотых.
+func round1(v float64) float64 { return math.Round(v*10) / 10 }
 
 // ─── Журнал отметок ────────────────────────────────────────────────────────
 
