@@ -5820,8 +5820,11 @@ export interface paths {
                         station?: string;
                         salary?: string;
                         hourly_rate?: string;
-                        /** @enum {string} */
-                        pay_type?: "monthly" | "daily";
+                        /**
+                         * @description hourly (107): начисление = часы закрытых смен × hourly_rate
+                         * @enum {string}
+                         */
+                        pay_type?: "monthly" | "daily" | "hourly";
                         daily_rate?: string;
                         shift_number?: number;
                         /** @description 4 цифры. Пусто — central подбирает сам. */
@@ -5965,8 +5968,11 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        /** @enum {string} */
-                        pay_type?: "monthly" | "daily";
+                        /**
+                         * @description hourly (107): начисление = часы закрытых смен × hourly_rate
+                         * @enum {string}
+                         */
+                        pay_type?: "monthly" | "daily" | "hourly";
                         salary?: string;
                         hourly_rate?: string;
                         daily_rate?: string;
@@ -17910,10 +17916,10 @@ export interface components {
             salary?: components["schemas"]["Decimal"];
             hourly_rate?: components["schemas"]["Decimal"];
             /**
-             * @description Тип оплаты труда (054): оклад или ставка за день
+             * @description Тип оплаты труда: оклад (054), ставка за день (054) или за час (107)
              * @enum {string}
              */
-            pay_type?: "monthly" | "daily";
+            pay_type?: "monthly" | "daily" | "hourly";
             daily_rate?: components["schemas"]["Decimal"];
             /** @description PIN входа в кассу. Возвращается ТОЛЬКО привилегированным ролям (owner/manager/superadmin) в GET /users и GET /users/{id} — чтобы «забыл PIN» решалось просмотром, а не перегенерацией. Для остальных ролей поле отсутствует. */
             pin?: string;
@@ -17931,10 +17937,10 @@ export interface components {
             salary?: components["schemas"]["Decimal"];
             hourly_rate?: components["schemas"]["Decimal"];
             /**
-             * @description Тип оплаты труда (054): оклад или ставка за день
+             * @description Тип оплаты труда: оклад (054), ставка за день (054) или за час (107)
              * @enum {string}
              */
-            pay_type?: "monthly" | "daily";
+            pay_type?: "monthly" | "daily" | "hourly";
             daily_rate?: components["schemas"]["Decimal"];
         };
         UsersList: {
@@ -18065,6 +18071,8 @@ export interface components {
             late_fine_per_minute?: components["schemas"]["Decimal"];
             /** @description Потолок штрафа; 0 = без потолка */
             late_fine_max?: components["schemas"]["Decimal"];
+            /** @description Округление длительности смены при почасовой оплате (107); 0 = не округлять */
+            shift_rounding_minutes?: number;
         };
         RestaurantInput: {
             name?: string;
@@ -18095,6 +18103,8 @@ export interface components {
             late_fine_per_minute?: components["schemas"]["Decimal"];
             /** @description Потолок штрафа; 0 = без потолка */
             late_fine_max?: components["schemas"]["Decimal"];
+            /** @description Округление длительности смены при почасовой оплате (107); 0 = не округлять */
+            shift_rounding_minutes?: number;
             menu_sort_by_sales?: boolean;
             delivery_enabled?: boolean;
             delivery_contacts_required?: boolean;
@@ -19495,8 +19505,11 @@ export interface components {
             user_name?: string;
             position?: string;
             role?: string;
-            /** @enum {string} */
-            pay_type?: "monthly" | "daily";
+            /**
+             * @description hourly (107): начисление = часы закрытых смен × hourly_rate
+             * @enum {string}
+             */
+            pay_type?: "monthly" | "daily" | "hourly";
             salary?: components["schemas"]["Decimal"];
             daily_rate?: components["schemas"]["Decimal"];
             /** @description Дней с отметкой в табеле за период */

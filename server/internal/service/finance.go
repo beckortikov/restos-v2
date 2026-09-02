@@ -1913,15 +1913,26 @@ func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period s
 		err = derr
 		return
 	}
-	if payTypeOf(u) == PayTypeDaily {
-		accrued = accruedFor(u, units, 0)
+	switch payTypeOf(u) {
+	case PayTypeDaily:
+		accrued = accruedFor(u, units, 0, decimal.FromInt(0))
 		if units != days {
 			basis = fmt.Sprintf("ставка %s × %d опл.ед. (%d дн., есть дни ×2) = %s", u.DailyRate, units, days, accrued)
 		} else {
 			basis = fmt.Sprintf("ставка %s × %d дн. = %s", u.DailyRate, days, accrued)
 		}
-	} else {
-		accrued = accruedFor(u, 0, extraUnits)
+	case PayTypeHourly:
+		// Кап почасовика — по ЧАСАМ, а не по окладу (он у него нулевой) и не
+		// по дням: сколько отработал, столько и можно выплатить.
+		hours, herr := s.hoursWorkedInPeriod(ctx, userID, period)
+		if herr != nil {
+			err = herr
+			return
+		}
+		accrued = accruedFor(u, 0, 0, hours)
+		basis = fmt.Sprintf("ставка %s × %s ч = %s", u.HourlyRate, hours, accrued)
+	default:
+		accrued = accruedFor(u, 0, extraUnits, decimal.FromInt(0))
 		if extraUnits > 0 {
 			basis = fmt.Sprintf("оклад %s + %d доп.смен × %s = %s", u.Salary, extraUnits, u.DailyRate, accrued)
 		} else {

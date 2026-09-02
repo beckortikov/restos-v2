@@ -594,6 +594,9 @@ export interface SalaryAccrualRow {
   dailyRate: number
   /** Дней с отметкой в табеле за период (общая явка, информационно). Для оклада начисление НЕ меняет — см. extraShiftUnits. */
   daysWorked: number
+  /** Часы закрытых смен за период (107), округлённые по правилу ресторана. */
+  hoursWorked: number
+  hourlyRate: number
   /** Оплачиваемых единиц (дни ×2, 066), табель ∪ ручные — источник accrued только для payType='daily'. */
   paidUnits: number
   /** Оплачиваемых единиц ТОЛЬКО из ручных отметок (без табеля, дни ×2 учтены) — источник доп. смен для payType='monthly' (гибрид «оклад + доп.смены»). */
@@ -631,6 +634,8 @@ export async function fetchSalaryAccrual(from: string, to: string, branchId?: st
     salary: Number(r.salary ?? 0),
     dailyRate: Number(r.daily_rate ?? 0),
     daysWorked: Number(r.days_worked ?? 0),
+    hoursWorked: Number(r.hours_worked ?? 0),
+    hourlyRate: Number(r.hourly_rate ?? 0),
     paidUnits: Number(r.paid_units ?? r.days_worked ?? 0),
     extraShiftUnits: Number(r.extra_shift_units ?? 0),
     accrued: Number(r.accrued ?? 0),

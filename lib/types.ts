@@ -56,6 +56,8 @@ export interface Restaurant {
   lateFineFixed?: string
   lateFinePerMinute?: string
   lateFineMax?: string
+  // Округление длительности смены при почасовой оплате (107). 0 = не округлять.
+  shiftRoundingMinutes?: number
   // Экранная клавиатура (iiko-style) на POS/смене/зале. Default false —
   // включается в настройках владельца для тач-терминалов без физ. клавиатуры.
   onScreenKeyboardEnabled?: boolean
@@ -113,8 +115,10 @@ export interface User {
   salary?: number
   // Тип оплаты труда (054). 'monthly' — оклад (salary), 'daily' — ставка за
   // отработанный день (dailyRate × дни с отметкой в табеле). Пусто = monthly.
-  payType?: 'monthly' | 'daily'
+  payType?: 'monthly' | 'daily' | 'hourly'
   dailyRate?: number
+  /** Ставка за час (107) — используется при payType='hourly'. */
+  hourlyRate?: number
   advance?: number
   deductions?: number
   password?: string

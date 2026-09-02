@@ -95,7 +95,7 @@ export async function requestUpdateEmployeeIdentity(userId: string, input: Parti
 // central, а не «сам филиал» (см. finance/payroll — кнопка ставки была
 // disabled={isBranch}). Значения — строками (decimal.Decimal на бэке).
 export async function requestUpdateEmployeePay(userId: string, input: Partial<{
-  payType: 'monthly' | 'daily'
+  payType: 'monthly' | 'daily' | 'hourly'
   salary: string
   hourlyRate: string
   dailyRate: string

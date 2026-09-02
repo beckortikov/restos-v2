@@ -30,8 +30,11 @@ type Restaurant struct {
 	LateFineFixed     decimal.Decimal `gorm:"column:late_fine_fixed;type:numeric(14,4);not null;default:0" json:"late_fine_fixed"`
 	LateFinePerMinute decimal.Decimal `gorm:"column:late_fine_per_minute;type:numeric(14,4);not null;default:0" json:"late_fine_per_minute"`
 	LateFineMax       decimal.Decimal `gorm:"column:late_fine_max;type:numeric(14,4);not null;default:0" json:"late_fine_max"`
-	EnforceStockCheck *bool           `gorm:"column:enforce_stock_check;default:false" json:"enforce_stock_check"`
-	TechCardsEnabled  *bool           `gorm:"column:tech_cards_enabled;default:true" json:"tech_cards_enabled"`
+	// ShiftRoundingMinutes (107) — округление длительности смены при почасовой
+	// оплате. 0 = не округлять. При дневной и окладе не участвует.
+	ShiftRoundingMinutes int   `gorm:"column:shift_rounding_minutes;not null;default:0" json:"shift_rounding_minutes"`
+	EnforceStockCheck    *bool `gorm:"column:enforce_stock_check;default:false" json:"enforce_stock_check"`
+	TechCardsEnabled     *bool `gorm:"column:tech_cards_enabled;default:true" json:"tech_cards_enabled"`
 	// ShiftBalanceCorrectedAt — маркер разовой коррекции балансов под фикс Н13
 	// (v3.16.94+). NULL = не выполнялась; заполнен = повтор запрещён.
 	ShiftBalanceCorrectedAt *time.Time `gorm:"column:shift_balance_corrected_at" json:"shift_balance_corrected_at,omitempty"`

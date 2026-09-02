@@ -29,6 +29,7 @@ export function RulesPanel({ onSaved }: { onSaved?: () => void }) {
   const [fixed, setFixed] = useState('0')
   const [perMinute, setPerMinute] = useState('0')
   const [max, setMax] = useState('0')
+  const [rounding, setRounding] = useState('0')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -42,6 +43,7 @@ export function RulesPanel({ onSaved }: { onSaved?: () => void }) {
         setFixed(String(r.lateFineFixed ?? 0))
         setPerMinute(String(r.lateFinePerMinute ?? 0))
         setMax(String(r.lateFineMax ?? 0))
+        setRounding(String(r.shiftRoundingMinutes ?? 0))
       } catch (e) {
         toast.error(humanizeError(e))
       } finally {
@@ -74,6 +76,7 @@ export function RulesPanel({ onSaved }: { onSaved?: () => void }) {
         lateFineFixed: fixed,
         lateFinePerMinute: perMinute,
         lateFineMax: max,
+        shiftRoundingMinutes: Number(rounding) || 0,
       })
       toast.success('Правила сохранены')
       onSaved?.()
@@ -150,6 +153,23 @@ export function RulesPanel({ onSaved }: { onSaved?: () => void }) {
               Штраф не списывается сам: система считает сумму, а удерживает её кнопкой человек — время на планшете
               может сбиться, а уход накануне остаться неотмеченным.
             </p>
+
+            <div className="border-t pt-4 space-y-3">
+              <div>
+                <h3 className="text-sm font-medium">Округление смены</h3>
+                <p className="text-xs text-muted-foreground">
+                  Влияет только на почасовую оплату: 7 ч 58 мин это «8 часов» или «7,97»? При окладе и дневной
+                  ставке не участвует. 0 — не округлять.
+                </p>
+              </div>
+              <RuleField
+                label="До кратного"
+                hint="Округляется каждая смена, в ближайшую сторону"
+                suffix="мин"
+                value={rounding}
+                onChange={setRounding}
+              />
+            </div>
 
             <div className="flex justify-end">
               <Button onClick={save} disabled={saving}>

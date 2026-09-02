@@ -116,6 +116,13 @@ var schemaSelfHealStmts = []string{
 	`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS late_fine_per_minute NUMERIC(14,4) NOT NULL DEFAULT 0`,
 	`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS late_fine_max        NUMERIC(14,4) NOT NULL DEFAULT 0`,
 	`ALTER TABLE salary_deductions ADD COLUMN IF NOT EXISTS source_ref TEXT`,
+
+	// 107: почасовая оплата. Округление смены читается на каждом расчёте
+	// начисления, а CHECK на pay_type должен принимать 'hourly' — иначе
+	// сохранение сотрудника падает.
+	`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS shift_rounding_minutes INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_pay_type_check`,
+	`ALTER TABLE users ADD CONSTRAINT users_pay_type_check CHECK (pay_type IN ('monthly','daily','hourly'))`,
 	`CREATE INDEX IF NOT EXISTS idx_order_items_bundle_group ON order_items (bundle_group_id)`,
 	`CREATE TABLE IF NOT EXISTS salary_deductions (
 		id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

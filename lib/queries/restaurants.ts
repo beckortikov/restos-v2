@@ -59,6 +59,8 @@ export async function updateRestaurant(id: string, data: Partial<{
   lateFineFixed: string
   lateFinePerMinute: string
   lateFineMax: string
+  /** Округление длительности смены при почасовой оплате (107); 0 = не округлять. */
+  shiftRoundingMinutes: number
   supplyAllowNegative: boolean
   onScreenKeyboardEnabled: boolean
   tablesEnabled: boolean
@@ -91,6 +93,7 @@ export async function updateRestaurant(id: string, data: Partial<{
   if (data.lateFineFixed !== undefined) updates.late_fine_fixed = data.lateFineFixed
   if (data.lateFinePerMinute !== undefined) updates.late_fine_per_minute = data.lateFinePerMinute
   if (data.lateFineMax !== undefined) updates.late_fine_max = data.lateFineMax
+  if (data.shiftRoundingMinutes !== undefined) updates.shift_rounding_minutes = data.shiftRoundingMinutes
   if (data.supplyAllowNegative !== undefined) updates.supply_allow_negative = data.supplyAllowNegative
   if (data.onScreenKeyboardEnabled !== undefined) updates.on_screen_keyboard_enabled = data.onScreenKeyboardEnabled
   if (data.tablesEnabled !== undefined) updates.tables_enabled = data.tablesEnabled

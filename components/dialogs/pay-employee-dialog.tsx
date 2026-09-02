@@ -109,7 +109,7 @@ export function PayEmployeeDialog({
   const [payMode, setPayMode] = useState<'accrual' | 'override'>('accrual')
   const [overrideReason, setOverrideReason] = useState('')
   const [selectedAccountId, setSelectedAccountId] = useState('')
-  const [formPayType, setFormPayType] = useState<'monthly' | 'daily'>('monthly')
+  const [formPayType, setFormPayType] = useState<'monthly' | 'daily' | 'hourly'>('monthly')
   // extraShiftRate — гибрид «оклад + доп. смены»: ставка доп. смены (то же
   // поле daily_rate, что у дневной оплаты, но для formPayType='monthly' не
   // заменяет оклад, а добавляется к нему за отмеченные в календаре дни).
@@ -138,9 +138,13 @@ export function PayEmployeeDialog({
     if (action === 'advance' || action === 'deduction') {
       setPayAmount(0)
     } else if (action === 'edit_salary') {
-      const pt = employee.payType === 'daily' ? 'daily' : 'monthly'
+      const pt = employee.payType === 'daily' ? 'daily' : employee.payType === 'hourly' ? 'hourly' : 'monthly'
       setFormPayType(pt)
-      setPayAmount(pt === 'daily' ? (employee.dailyRate ?? 0) : (employee.salary ?? 0))
+      setPayAmount(
+        pt === 'daily' ? (employee.dailyRate ?? 0)
+          : pt === 'hourly' ? (employee.hourlyRate ?? 0)
+            : (employee.salary ?? 0),
+      )
       // daily_rate осмыслен как «ставка доп. смены» только если сотрудник
       // УЖЕ оклад — если он был на дневной, его daily_rate это ставка ЗА
       // ДЕНЬ, переносить её в доп.смены при смене типа было бы совпадением,
@@ -199,15 +203,23 @@ export function PayEmployeeDialog({
           // пишет в БД филиала напрямую (см. requestUpdateEmployeePay).
           await requestUpdateEmployeePay(employee.id, formPayType === 'daily'
             ? { payType: 'daily', dailyRate: String(payAmount), salary: '0' }
-            : { payType: 'monthly', salary: String(payAmount), dailyRate: String(extraShiftRate) })
+            : formPayType === 'hourly'
+              // Оклад обнуляем, как и у дневной: «оклад 3000 + 20 за час» по
+              // карточке не читается, за что человеку платят.
+              ? { payType: 'hourly', hourlyRate: String(payAmount), salary: '0' }
+              : { payType: 'monthly', salary: String(payAmount), dailyRate: String(extraShiftRate) })
           toast.success(`Отправлено филиалу — оплата труда ${employee.name} применится в течение ~30 секунд`)
         } else {
           await updateUser(employee.id, formPayType === 'daily'
             ? { pay_type: 'daily', daily_rate: payAmount, salary: 0 }
-            : { pay_type: 'monthly', salary: payAmount, daily_rate: extraShiftRate })
-          toast.success(formPayType === 'daily'
-            ? `${employee.name}: ${formatCurrency(payAmount)} за день`
-            : `Оклад ${employee.name}: ${formatCurrency(payAmount)}${extraShiftRate > 0 ? ` + доп.смена ${formatCurrency(extraShiftRate)}` : ''}`)
+            : formPayType === 'hourly'
+              ? { pay_type: 'hourly', hourly_rate: payAmount, salary: 0 }
+              : { pay_type: 'monthly', salary: payAmount, daily_rate: extraShiftRate })
+          toast.success(
+            formPayType === 'daily' ? `${employee.name}: ${formatCurrency(payAmount)} за день`
+              : formPayType === 'hourly' ? `${employee.name}: ${formatCurrency(payAmount)} за час`
+                : `Оклад ${employee.name}: ${formatCurrency(payAmount)}${extraShiftRate > 0 ? ` + доп.смена ${formatCurrency(extraShiftRate)}` : ''}`,
+          )
         }
       } else if (action === 'advance') {
         if (payAmount <= 0) { setPaying(false); return }
@@ -369,14 +381,19 @@ export function PayEmployeeDialog({
               <div className="flex rounded-lg border border-border overflow-hidden">
                 {([
                   ['monthly', 'Оклад за месяц'],
-                  ['daily', 'Ставка за день'],
+                  ['daily', 'За день'],
+                  ['hourly', 'За час'],
                 ] as const).map(([v, label]) => (
                   <button
                     key={v}
                     type="button"
                     onClick={() => {
                       setFormPayType(v)
-                      setPayAmount(v === 'daily' ? (employee.dailyRate ?? 0) : (employee.salary ?? 0))
+                      setPayAmount(
+                        v === 'daily' ? (employee.dailyRate ?? 0)
+                          : v === 'hourly' ? (employee.hourlyRate ?? 0)
+                            : (employee.salary ?? 0),
+                      )
                       setExtraShiftRate(v === 'monthly' && employee.payType !== 'daily' ? (employee.dailyRate ?? 0) : 0)
                     }}
                     className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
@@ -387,6 +404,16 @@ export function PayEmployeeDialog({
                   </button>
                 ))}
               </div>
+              {formPayType === 'hourly' && (
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Начисление считается автоматически: ставка × часы ЗАКРЫТЫХ смен. Открытая смена
+                  в сумму не входит — у неё нет ухода.
+                  {(() => {
+                    const h = accrual?.hoursWorked ?? 0
+                    return h > 0 ? ` За выбранный период ${h} ч.` : ' За выбранный период закрытых смен пока нет.'
+                  })()}
+                </p>
+              )}
               {formPayType === 'daily' && (
                 <p className="text-[11px] text-muted-foreground mt-1">
                   Начисление считается автоматически: ставка × дни с отметкой в табеле.
@@ -401,7 +428,10 @@ export function PayEmployeeDialog({
 
           <div>
             <label className="text-xs font-medium text-muted-foreground mb-1 block">
-              {action === 'edit_salary' ? (formPayType === 'daily' ? 'Ставка за день (TJS)' : 'Оклад за месяц (TJS)') :
+              {action === 'edit_salary'
+              ? (formPayType === 'daily' ? 'Ставка за день (TJS)'
+                : formPayType === 'hourly' ? 'Ставка за час (TJS)'
+                  : 'Оклад за месяц (TJS)') :
                action === 'deduction' ? 'Сумма удержания (TJS)' :
                action === 'advance' ? 'Сумма аванса (TJS)' : 'Сумма выплаты (TJS)'}
             </label>

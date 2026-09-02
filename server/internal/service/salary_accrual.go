@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"math"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +21,8 @@ import (
 const (
 	PayTypeMonthly = "monthly"
 	PayTypeDaily   = "daily"
+	// PayTypeHourly (107) — оплата за фактические часы закрытых смен.
+	PayTypeHourly = "hourly"
 )
 
 // SalaryAccrualRow — сколько сотруднику НАЧИСЛЕНО за период и из чего это
@@ -42,10 +46,14 @@ type SalaryAccrualRow struct {
 	Salary     decimal.Decimal `json:"salary"`
 	DailyRate  decimal.Decimal `json:"daily_rate"`
 	DaysWorked int             `json:"days_worked"`
-	PaidUnits  int             `json:"paid_units"`
-	Accrued    decimal.Decimal `json:"accrued"`
-	Advance    decimal.Decimal `json:"advance"`
-	Deductions decimal.Decimal `json:"deductions"`
+	// HoursWorked / HourlyRate — почасовая оплата (107). У остальных укладов
+	// часы тоже заполняются: их показывают в табеле, но на сумму они не влияют.
+	HoursWorked decimal.Decimal `json:"hours_worked"`
+	HourlyRate  decimal.Decimal `json:"hourly_rate"`
+	PaidUnits   int             `json:"paid_units"`
+	Accrued     decimal.Decimal `json:"accrued"`
+	Advance     decimal.Decimal `json:"advance"`
+	Deductions  decimal.Decimal `json:"deductions"`
 	// PaidSalary/PaidCombined (082) — Σ проводок category=«Зарплата»/
 	// («Зарплата»+«Аванс») с salary_period = периоду запроса, не отменённых.
 	// Единственный источник истины для «выплачено за этот месяц» — раньше
@@ -107,6 +115,12 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 	if err != nil {
 		return nil, err
 	}
+	// Часы — по ЗАКРЫТЫМ сменам и с округлением ресторана: у открытой смены
+	// нет ухода, и платить за незавершённое нельзя.
+	hoursByUser, err := s.hoursWorked(ctx, rid, from, to)
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]SalaryAccrualRow, 0, len(users))
 	for _, u := range users {
@@ -122,6 +136,8 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 			PaidSalary:      paidSalaryByUser[u.ID],
 			PaidCombined:    paidCombinedByUser[u.ID],
 			ExtraShiftUnits: extraUnits[u.ID],
+			HoursWorked:     hoursByUser[u.ID],
+			HourlyRate:      decimal.Normalize(u.HourlyRate),
 		}
 		if u.Name != nil {
 			row.UserName = *u.Name
@@ -132,10 +148,13 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 		if u.Role != nil {
 			row.Role = *u.Role
 		}
-		if payTypeOf(u) == PayTypeDaily {
-			row.Accrued = accruedFor(u, row.PaidUnits, 0)
-		} else {
-			row.Accrued = accruedFor(u, 0, row.ExtraShiftUnits)
+		switch payTypeOf(u) {
+		case PayTypeDaily:
+			row.Accrued = accruedFor(u, row.PaidUnits, 0, decimal.FromInt(0))
+		case PayTypeHourly:
+			row.Accrued = accruedFor(u, 0, 0, row.HoursWorked)
+		default:
+			row.Accrued = accruedFor(u, 0, row.ExtraShiftUnits, decimal.FromInt(0))
 		}
 		out = append(out, row)
 	}
@@ -246,8 +265,14 @@ func monthPrefix(ymd string) string {
 // payTypeOf — с дефолтом. NULL/пусто трактуем как оклад: это поведение до 053,
 // и молча перевести кого-то на дневную оплату нельзя.
 func payTypeOf(u models.User) string {
-	if u.PayType != nil && *u.PayType == PayTypeDaily {
+	if u.PayType == nil {
+		return PayTypeMonthly
+	}
+	switch *u.PayType {
+	case PayTypeDaily:
 		return PayTypeDaily
+	case PayTypeHourly:
+		return PayTypeHourly
 	}
 	return PayTypeMonthly
 }
@@ -263,9 +288,14 @@ func payTypeOf(u models.User) string {
 //     покрыта окладом, начисление не должно расти от факта, что он ходит
 //     на работу каждый день — расти должно только от ОСОЗНАННОЙ отметки
 //     «доп. смена» тем же календарём.
-func accruedFor(u models.User, paidUnits, extraShiftUnits int) decimal.Decimal {
-	if payTypeOf(u) == PayTypeDaily {
+func accruedFor(u models.User, paidUnits, extraShiftUnits int, hours decimal.Decimal) decimal.Decimal {
+	switch payTypeOf(u) {
+	case PayTypeDaily:
 		return decimal.Normalize(decimal.Mul(u.DailyRate, decimal.FromInt(int64(paidUnits))))
+	case PayTypeHourly:
+		// Часы уже округлены по правилу ресторана (см. hoursWorked): считать
+		// здесь второй раз значило бы округлить дважды.
+		return decimal.Normalize(decimal.Mul(u.HourlyRate, hours))
 	}
 	extra := decimal.Mul(u.DailyRate, decimal.FromInt(int64(extraShiftUnits)))
 	return decimal.Normalize(decimal.Add(u.Salary, extra))
@@ -708,4 +738,84 @@ func (s *SalaryService) SetWorkedDays(ctx context.Context, userID, from, to stri
 		return nil, err
 	}
 	return s.WorkedDays(ctx, userID, from, to)
+}
+
+// hoursWorked — отработанные часы каждого за период, уже округлённые по
+// правилу ресторана (107).
+//
+// Округляем КАЖДУЮ СМЕНУ, а не сумму: правило звучит как «смена считается с
+// точностью до 5 минут», и округление итога месяца дало бы другую цифру —
+// причём такую, которую невозможно проверить по табелю глазами.
+func (s *SalaryService) hoursWorked(ctx context.Context, restaurantID, from, to string) (map[string]decimal.Decimal, error) {
+	raw := s.r.DB().Session(&gormSessionNewDB).WithContext(ctx)
+
+	var rounding int
+	if err := raw.Table("restaurants").
+		Select("COALESCE(shift_rounding_minutes, 0)").
+		Where("id = ?", restaurantID).Scan(&rounding).Error; err != nil {
+		rounding = 0
+	}
+
+	q := raw.Table("time_entries").
+		Select("user_id::text AS user_id, COALESCE(total_hours, 0)::float8 AS hours").
+		Where("restaurant_id = ? AND user_id IS NOT NULL AND clock_out IS NOT NULL", restaurantID)
+	if from != "" {
+		q = q.Where("clock_in::date >= ?::date", from)
+	}
+	if to != "" {
+		q = q.Where("clock_in::date <= ?::date", to)
+	}
+	var rows []struct {
+		UserID string  `gorm:"column:user_id"`
+		Hours  float64 `gorm:"column:hours"`
+	}
+	if err := q.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	out := map[string]decimal.Decimal{}
+	for _, r := range rows {
+		h := roundShiftHours(r.Hours, rounding)
+		// Через строку, а не напрямую из float: иначе в деньги протекает
+		// двоичная дробь и сумма перестаёт сходиться с ручной проверкой.
+		v := decimal.MustFromString(strconv.FormatFloat(h, 'f', 4, 64))
+		out[r.UserID] = decimal.Add(out[r.UserID], v)
+	}
+	for k := range out {
+		out[k] = decimal.Normalize(out[k])
+	}
+	return out, nil
+}
+
+// roundShiftHours — округление длительности смены до кратного step минут, в
+// БЛИЖАЙШУЮ сторону. step=0 — не округлять.
+func roundShiftHours(hours float64, step int) float64 {
+	if step <= 0 {
+		return hours
+	}
+	minutes := hours * 60
+	k := float64(step)
+	return math.Round(minutes/k) * k / 60
+}
+
+// hoursWorkedInPeriod — часы ОДНОГО сотрудника за месяц «YYYY-MM», с тем же
+// округлением, что и в общем начислении: кап на выплату обязан совпадать с
+// ведомостью до копейки, иначе выплату режет непонятно почему.
+func (s *SalaryService) hoursWorkedInPeriod(ctx context.Context, userID, period string) (decimal.Decimal, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return decimal.FromInt(0), err
+	}
+	// «2026-07» → границы месяца. Сравнение по префиксу, как в
+	// daysWorkedInPeriod: считать последний день месяца вручную незачем.
+	from := period + "-01"
+	to := period + "-31"
+	all, err := s.hoursWorked(ctx, rid, from, to)
+	if err != nil {
+		return decimal.FromInt(0), err
+	}
+	if v, ok := all[userID]; ok {
+		return v, nil
+	}
+	return decimal.FromInt(0), nil
 }

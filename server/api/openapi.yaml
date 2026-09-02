@@ -2261,7 +2261,7 @@ paths:
                 station: { type: string }
                 salary: { type: string }
                 hourly_rate: { type: string }
-                pay_type: { type: string, enum: [monthly, daily] }
+                pay_type: { type: string, enum: [monthly, daily, hourly], description: "hourly (107): начисление = часы закрытых смен × hourly_rate" }
                 daily_rate: { type: string }
                 shift_number: { type: integer }
                 pin: { type: string, description: "4 цифры. Пусто — central подбирает сам." }
@@ -2332,7 +2332,7 @@ paths:
             schema:
               type: object
               properties:
-                pay_type: { type: string, enum: [monthly, daily] }
+                pay_type: { type: string, enum: [monthly, daily, hourly], description: "hourly (107): начисление = часы закрытых смен × hourly_rate" }
                 salary: { type: string }
                 hourly_rate: { type: string }
                 daily_rate: { type: string }
@@ -6564,7 +6564,7 @@ components:
         station: { type: string }
         salary: { $ref: "#/components/schemas/Decimal" }
         hourly_rate: { $ref: "#/components/schemas/Decimal" }
-        pay_type: { type: string, enum: [monthly, daily], description: "Тип оплаты труда (054): оклад или ставка за день" }
+        pay_type: { type: string, enum: [monthly, daily, hourly], description: "Тип оплаты труда: оклад (054), ставка за день (054) или за час (107)" }
         daily_rate: { $ref: "#/components/schemas/Decimal" }
         pin: { type: string, description: "PIN входа в кассу. Возвращается ТОЛЬКО привилегированным ролям (owner/manager/superadmin) в GET /users и GET /users/{id} — чтобы «забыл PIN» решалось просмотром, а не перегенерацией. Для остальных ролей поле отсутствует." }
     UserInput:
@@ -6580,7 +6580,7 @@ components:
         station: { type: string }
         salary: { $ref: "#/components/schemas/Decimal" }
         hourly_rate: { $ref: "#/components/schemas/Decimal" }
-        pay_type: { type: string, enum: [monthly, daily], description: "Тип оплаты труда (054): оклад или ставка за день" }
+        pay_type: { type: string, enum: [monthly, daily, hourly], description: "Тип оплаты труда: оклад (054), ставка за день (054) или за час (107)" }
         daily_rate: { $ref: "#/components/schemas/Decimal" }
     UsersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/User" } } } }
 
@@ -6693,6 +6693,7 @@ components:
         late_fine_fixed: { $ref: "#/components/schemas/Decimal", description: "Фиксированная часть штрафа за опоздание" }
         late_fine_per_minute: { $ref: "#/components/schemas/Decimal", description: "Штраф за каждую минуту сверх грейса" }
         late_fine_max: { $ref: "#/components/schemas/Decimal", description: "Потолок штрафа; 0 = без потолка" }
+        shift_rounding_minutes: { type: integer, description: "Округление длительности смены при почасовой оплате (107); 0 = не округлять" }
     RestaurantInput:
       type: object
       properties:
@@ -6719,6 +6720,7 @@ components:
         late_fine_fixed: { $ref: "#/components/schemas/Decimal", description: "Фиксированная часть штрафа за опоздание" }
         late_fine_per_minute: { $ref: "#/components/schemas/Decimal", description: "Штраф за каждую минуту сверх грейса" }
         late_fine_max: { $ref: "#/components/schemas/Decimal", description: "Потолок штрафа; 0 = без потолка" }
+        shift_rounding_minutes: { type: integer, description: "Округление длительности смены при почасовой оплате (107); 0 = не округлять" }
         menu_sort_by_sales: { type: boolean }
         delivery_enabled: { type: boolean }
         delivery_contacts_required: { type: boolean }
@@ -8004,7 +8006,7 @@ components:
         user_name: { type: string }
         position: { type: string }
         role: { type: string }
-        pay_type: { type: string, enum: [monthly, daily] }
+        pay_type: { type: string, enum: [monthly, daily, hourly], description: "hourly (107): начисление = часы закрытых смен × hourly_rate" }
         salary: { $ref: "#/components/schemas/Decimal" }
         daily_rate: { $ref: "#/components/schemas/Decimal" }
         days_worked: { type: integer, description: "Дней с отметкой в табеле за период" }
