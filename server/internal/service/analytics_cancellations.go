@@ -82,6 +82,22 @@ type CancellationsReport struct {
 	Offset  int                  `json:"offset"`
 }
 
+// newCancellationsSummary — списки пустые, а не nil.
+//
+// nil-срез уходит в JSON как null, а openapi.yaml объявляет by_reason/
+// by_employee/by_dish/by_day массивами. Страница отмен на этом падала целиком:
+// BucketCard делает buckets.map по null. Ловится это только на данных, где
+// какой-то из разрезов пуст — например, на central, где отмен позиций нет
+// вовсе, и «Топ отменяемых блюд» приходил null.
+func newCancellationsSummary() CancellationsSummary {
+	return CancellationsSummary{
+		ByReason:   []CancellationBucket{},
+		ByEmployee: []CancellationBucket{},
+		ByDish:     []CancellationBucket{},
+		ByDay:      []CancellationBucket{},
+	}
+}
+
 const (
 	cancellationsDefaultLimit = 50
 	cancellationsMaxLimit     = 500
@@ -153,7 +169,7 @@ func (s *AnalyticsService) CancellationsReport(ctx context.Context, f Cancellati
 	args = append(args, args...)
 	unionSQL := cancellationsUnionSQL(f.From != nil, f.To != nil)
 
-	out := &CancellationsReport{Rows: []CancellationRow{}}
+	out := &CancellationsReport{Rows: []CancellationRow{}, Summary: newCancellationsSummary()}
 	if f.From != nil {
 		s := f.From.Format("2006-01-02")
 		out.Period.From = &s
@@ -202,7 +218,7 @@ func (s *AnalyticsService) CancellationsReport(ctx context.Context, f Cancellati
 	out.Summary.OrderCancelsAmount = decimal.Normalize(out.Summary.OrderCancelsAmount)
 
 	topN := func(groupExpr, where string) ([]CancellationBucket, error) {
-		var rows []CancellationBucket
+		rows := []CancellationBucket{}
 		sql := fmt.Sprintf(
 			"SELECT %s AS name, COALESCE(SUM(amount),0) AS amount, COUNT(*) AS count FROM (%s) x %s GROUP BY name ORDER BY amount DESC LIMIT 10",
 			groupExpr, unionSQL, where)

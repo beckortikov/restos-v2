@@ -1751,7 +1751,7 @@ func (s *NetworkService) CancellationsReportNetwork(ctx context.Context, f Cance
 		nameByID[b.ID] = b.Name
 	}
 
-	out := &NetworkCancellationsReport{Rows: []NetworkCancellationRow{}}
+	out := &NetworkCancellationsReport{Rows: []NetworkCancellationRow{}, Summary: newCancellationsSummary()}
 	if f.From != nil {
 		s := f.From.Format("2006-01-02")
 		out.Period.From = &s
@@ -1827,7 +1827,7 @@ func (s *NetworkService) CancellationsReportNetwork(ctx context.Context, f Cance
 	out.Summary.OrderCancelsAmount = decimal.Normalize(out.Summary.OrderCancelsAmount)
 
 	topN := func(groupExpr, where string) ([]CancellationBucket, error) {
-		var rows []CancellationBucket
+		rows := []CancellationBucket{}
 		sql := fmt.Sprintf(
 			"SELECT %s AS name, COALESCE(SUM(amount),0) AS amount, COUNT(*) AS count FROM (%s) x %s GROUP BY name ORDER BY amount DESC LIMIT 10",
 			groupExpr, unionSQL, where)

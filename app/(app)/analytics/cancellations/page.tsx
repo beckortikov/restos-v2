@@ -159,7 +159,7 @@ export default function CancellationsPage() {
           {/* Динамика по дням */}
           <div className="bg-card rounded-xl border border-border p-4 md:p-5">
             <h2 className="text-sm font-semibold mb-3">Динамика по дням</h2>
-            {summary.by_day.length === 0 ? (
+            {(summary.by_day ?? []).length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">Нет отмен за период</p>
             ) : (
               <div className="overflow-x-auto">
@@ -172,7 +172,7 @@ export default function CancellationsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {[...summary.by_day].sort((a, b) => (a.name < b.name ? 1 : -1)).map(d => (
+                    {[...(summary.by_day ?? [])].sort((a, b) => (a.name < b.name ? 1 : -1)).map(d => (
                       <tr key={d.name} className="border-b border-border/50 last:border-0">
                         <td className="py-2 pr-2 font-medium">{new Date(d.name + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}</td>
                         <td className="py-2 px-2 text-right tabular-nums">{d.count}</td>
@@ -254,16 +254,19 @@ function KpiCard({ label, value, icon: Icon, color }: { label: string; value: st
   )
 }
 
-function BucketCard({ title, buckets, empty }: { title: string; buckets: CancellationBucket[]; empty: string }) {
-  const max = Math.max(1, ...buckets.map(b => Number(b.amount)))
+function BucketCard({ title, buckets, empty }: { title: string; buckets: CancellationBucket[] | null; empty: string }) {
+  // Разрез без данных бэк отдаёт пустым массивом (см. newCancellationsSummary),
+  // но одна null-ссылка здесь роняла весь раздел отмен — держим оборону.
+  const items = buckets ?? []
+  const max = Math.max(1, ...items.map(b => Number(b.amount)))
   return (
     <div className="bg-card rounded-xl border border-border p-4">
       <h2 className="text-sm font-semibold mb-3">{title}</h2>
-      {buckets.length === 0 ? (
+      {items.length === 0 ? (
         <p className="text-xs text-muted-foreground text-center py-6">{empty}</p>
       ) : (
         <div className="space-y-2">
-          {buckets.slice(0, 6).map(b => {
+          {items.slice(0, 6).map(b => {
             const pct = Math.max(4, (Number(b.amount) / max) * 100)
             return (
               <div key={b.name}>
