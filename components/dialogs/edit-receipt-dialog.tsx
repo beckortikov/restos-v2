@@ -74,14 +74,22 @@ export function EditReceiptDialog({ receipt, open, onOpenChange, onSuccess }: {
 
   // total пересчитывается на лету из строк — то же, что увидит бэк.
   const total = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.pricePerUnit) || 0), 0)
-  const paidNum = paymentType === 'paid' ? total : (Number(paidAmount.replace(',', '.')) || 0)
+  // Оплачено ВЫВОДИТСЯ из типа оплаты, свободно вводится только у «Частично»
+  // (бэк форсирует ровно так же — UpdateReceipt, Тир C). Раньше «Кредит» брал
+  // сумму из префилленного поля, и перевод оплаченной накладной в кредит
+  // отправлял paid=total: деньги не возвращались, долг не рос.
+  const paidNum = paymentType === 'paid' ? total
+    : paymentType === 'credit' ? 0
+      : (Number(paidAmount.replace(',', '.')) || 0)
   const acc = accounts.find(a => a.id === accountId)
   const paidDelta = paidNum - (receipt.paidAmount ?? 0)
+  const newDebt = total - paidNum
   const overBalance = paidDelta > 0 && !!acc && paidDelta > acc.balance + 0.001
   const overTotal = paidNum > total + 0.001
   const needsAccount = paidDelta !== 0 && !accountId
+  const needsSupplier = newDebt > 0.001 && !receipt.supplierId
   const anyLineBelowMin = lines.some(l => (Number(l.qty) || 0) < l.minQty - 0.001)
-  const canSubmit = !saving && !loading && total > 0 && !overBalance && !overTotal && !needsAccount && !anyLineBelowMin
+  const canSubmit = !saving && !loading && total > 0 && !overBalance && !overTotal && !needsAccount && !needsSupplier && !anyLineBelowMin
 
   async function submit() {
     if (!receipt || !canSubmit) return
@@ -185,7 +193,9 @@ export function EditReceiptDialog({ receipt, open, onOpenChange, onSuccess }: {
                 </button>
               ))}
             </div>
-            {paymentType !== 'paid' && (
+            {/* Поле только у «Частично» — у «Оплачено»/«Кредит» сумма
+                предопределена типом (total / 0), показывать ввод нечего. */}
+            {paymentType === 'partial' && (
               <input
                 inputMode="decimal"
                 value={paidAmount}
@@ -198,6 +208,20 @@ export function EditReceiptDialog({ receipt, open, onOpenChange, onSuccess }: {
               <p className="flex items-center gap-1.5 text-xs text-destructive">
                 <AlertTriangle className="size-3.5 shrink-0" />
                 Оплачено не может быть больше суммы накладной ({formatCurrency(total)}).
+              </p>
+            )}
+            {newDebt > 0.001 && (
+              <p className="text-xs text-muted-foreground">
+                Долг поставщику: {formatCurrency(newDebt)}
+                {receipt.debtAmount > 0.001 && ` (было ${formatCurrency(receipt.debtAmount)})`}
+              </p>
+            )}
+            {/* Бэк отобьёт долг без поставщика («долг не на кого записать») —
+                предупреждаем до отправки, а не ловим 400. */}
+            {needsSupplier && (
+              <p className="flex items-center gap-1.5 text-xs text-destructive">
+                <AlertTriangle className="size-3.5 shrink-0" />
+                У накладной не указан поставщик — долг не на кого записать.
               </p>
             )}
           </div>

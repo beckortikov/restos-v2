@@ -365,6 +365,142 @@ func TestStockReceipt_Update_SupplierChange_BlockedByDebt(t *testing.T) {
 	}
 }
 
+// TestStockReceipt_Update_PaidToCredit_ReturnsMoneyAndRaisesDebt — перевод
+// ОПЛАЧЕННОЙ накладной в «Кредит» обязан вернуть деньги на счёт и начислить
+// долг поставщику. Владелец сообщил обратное: «оплаченные не уменьшается, а
+// долг не повышается». Причина — тип оплаты не форсировал paid_amount:
+// диалог правки префилливал поле текущей оплатой и слал paid_amount=total,
+// бэк ему верил → accountDelta=0, newDebt=0, а в заголовке оседало
+// противоречие credit + paid=total + debt=0.
+//
+// Тест шлёт ИМЕННО тот payload, что слал баговый диалог (paid_amount=total
+// вместе с payment_type=credit) — фикс обязан игнорировать присланную сумму,
+// а не полагаться на исправленный клиент.
+func TestStockReceipt_Update_PaidToCredit_ReturnsMoneyAndRaisesDebt(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accID := seedForWrite(t, f)
+	topUp(t, gdb, accID) // 10000
+	makeOwner(t, f.rid)
+
+	supID := uuid.NewString()
+	supName := "Поставщик"
+	if err := gdb.Create(&models.Supplier{ID: supID, Name: &supName, RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+	ingID := uuid.NewString()
+	ingName, ingUnit := "Сахар", "kg"
+	if err := gdb.Create(&models.Ingredient{ID: ingID, Name: &ingName, Unit: &ingUnit, RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Оплаченная приёмка на 1000: деньги списаны, долга нет.
+	cr, cb := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+		"payment_type": "paid", "account_id": accID, "supplier_id": supID,
+		"lines": []map[string]any{{"ingredient_id": ingID, "name": ingName, "qty": "10", "price_per_unit": "100"}},
+	})
+	if cr.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d %s", cr.StatusCode, cb)
+	}
+	var receipt models.StockReceipt
+	_ = json.Unmarshal(cb, &receipt)
+	if bal := accBalance(t, gdb, accID); !bal.Equal(decimal.MustFromString("9000")) {
+		t.Fatalf("баланс после оплаченной приёмки = %s, want 9000", bal)
+	}
+	var sup models.Supplier
+	gdb.Where("id = ?", supID).First(&sup)
+	if !sup.CurrentDebt.IsZero() {
+		t.Fatalf("долг поставщика после оплаченной приёмки = %s, want 0", sup.CurrentDebt)
+	}
+
+	// Переводим в кредит, повторяя баговый payload (paid_amount=total).
+	ur, ub := f.patch(t, "/api/v1/stock/receipts/"+receipt.ID, tok, uuid.NewString(), map[string]any{
+		"payment_type": "credit", "paid_amount": "1000", "account_id": accID,
+	})
+	if ur.StatusCode != http.StatusOK {
+		t.Fatalf("update to credit: %d %s", ur.StatusCode, ub)
+	}
+	var updated models.StockReceipt
+	_ = json.Unmarshal(ub, &updated)
+	if !updated.PaidAmount.IsZero() {
+		t.Errorf("paid_amount = %s, want 0 («кредит» = не платили)", updated.PaidAmount)
+	}
+	if !updated.DebtAmount.Equal(decimal.MustFromString("1000")) {
+		t.Errorf("debt_amount = %s, want 1000", updated.DebtAmount)
+	}
+	if derefStr(updated.PaymentType) != "credit" {
+		t.Errorf("payment_type = %s, want credit", derefStr(updated.PaymentType))
+	}
+	// Деньги вернулись на счёт.
+	if bal := accBalance(t, gdb, accID); !bal.Equal(decimal.MustFromString("10000")) {
+		t.Errorf("баланс после перевода в кредит = %s, want 10000 (деньги вернулись)", bal)
+	}
+	// Долг поставщика вырос на всю сумму накладной.
+	gdb.Where("id = ?", supID).First(&sup)
+	if !sup.CurrentDebt.Equal(decimal.MustFromString("1000")) {
+		t.Errorf("долг поставщика = %s, want 1000", sup.CurrentDebt)
+	}
+	// Связанная проводка обнулена: за товар больше не заплачено.
+	var goodsOp models.FinancialOperation
+	gdb.Where("source_ref = ?", "receipt:"+receipt.ID).First(&goodsOp)
+	if !goodsOp.Amount.IsZero() {
+		t.Errorf("goodsOp.Amount = %s, want 0", goodsOp.Amount)
+	}
+
+	// Обратно в «Оплачено» — деньги снова списываются, долг гасится.
+	br, bb := f.patch(t, "/api/v1/stock/receipts/"+receipt.ID, tok, uuid.NewString(), map[string]any{
+		"payment_type": "paid", "account_id": accID,
+	})
+	if br.StatusCode != http.StatusOK {
+		t.Fatalf("update back to paid: %d %s", br.StatusCode, bb)
+	}
+	if bal := accBalance(t, gdb, accID); !bal.Equal(decimal.MustFromString("9000")) {
+		t.Errorf("баланс после возврата в «оплачено» = %s, want 9000", bal)
+	}
+	gdb.Where("id = ?", supID).First(&sup)
+	if !sup.CurrentDebt.IsZero() {
+		t.Errorf("долг поставщика после возврата в «оплачено» = %s, want 0", sup.CurrentDebt)
+	}
+}
+
+// TestStockReceipt_Update_CreditWithoutSupplier_Rejected — «кредит» без
+// поставщика отбивается: долг не на кого записать (тот же инвариант, что в
+// CreateReceipt). Раньше такая накладная молча проходила с paid=total и
+// debt=0 — долга не возникало вовсе, поэтому гейт не срабатывал.
+func TestStockReceipt_Update_CreditWithoutSupplier_Rejected(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accID := seedForWrite(t, f)
+	topUp(t, gdb, accID)
+	makeOwner(t, f.rid)
+
+	ingID := uuid.NewString()
+	ingName, ingUnit := "Соль", "kg"
+	if err := gdb.Create(&models.Ingredient{ID: ingID, Name: &ingName, Unit: &ingUnit, RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+	cr, cb := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+		"payment_type": "paid", "account_id": accID,
+		"lines": []map[string]any{{"ingredient_id": ingID, "name": ingName, "qty": "2", "price_per_unit": "50"}},
+	})
+	if cr.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d %s", cr.StatusCode, cb)
+	}
+	var receipt models.StockReceipt
+	_ = json.Unmarshal(cb, &receipt)
+
+	r, b := f.patch(t, "/api/v1/stock/receipts/"+receipt.ID, tok, uuid.NewString(), map[string]any{
+		"payment_type": "credit", "account_id": accID,
+	})
+	if r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("кредит без поставщика: %d %s, want 400", r.StatusCode, b)
+	}
+	// Баланс не тронут отбитой правкой.
+	if bal := accBalance(t, gdb, accID); !bal.Equal(decimal.MustFromString("9900")) {
+		t.Errorf("баланс после отбитой правки = %s, want 9900 (не тронут)", bal)
+	}
+}
+
 func derefStr(s *string) string {
 	if s == nil {
 		return ""

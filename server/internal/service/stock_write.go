@@ -509,8 +509,10 @@ func nilIfEmpty(s string) *string {
 //	    расход «переедет» в другой отчётный период молча, foBizDay читает
 //	    именно это поле) и supplier (только пока debt_amount=0 — перенос
 //	    долга между поставщиками не входит в v1).
-//	C — payment_type/paid_amount/account_id: paid_amount — целевое АБСОЛЮТНОЕ
-//	    значение (не дельта). Дельта применяется к балансу счёта и
+//	C — payment_type/paid_amount/account_id: payment_type — источник истины,
+//	    paid_amount выводится из него ('paid' = total, 'credit' = 0) и как
+//	    свободное целевое АБСОЛЮТНОЕ значение (не дельта) принимается только
+//	    у 'partial'. Дельта применяется к балансу счёта и
 //	    supplier.CurrentDebt; goods/service-сплит пересчитывается по формуле
 //	    CreateReceipt. account_id в апдейте обязан совпадать с уже связанным
 //	    (смена счёта оплаты задним числом отложена).
@@ -895,6 +897,27 @@ func (s *StockService) UpdateReceipt(ctx context.Context, id string, in ReceiptU
 		switch {
 		case newPaymentType == "paid":
 			newPaidAmount = newTotalAmount
+		case newPaymentType == "credit":
+			// Симметрично "paid": тип оплаты — источник истины, paid_amount из него
+			// ВЫВОДИТСЯ, а не принимается от клиента. "Кредит" по определению значит
+			// «не платили»: paid=0, весь total уходит в долг поставщику.
+			//
+			// Без этой ветки бэк доверял присланному paid_amount, а диалог правки
+			// (edit-receipt-dialog) префиллил поле текущей оплатой и не сбрасывал его
+			// при переключении на «Кредит» — оплаченная накладная переводилась в
+			// кредит с paid_amount=total: accountDelta=0 (деньги не вернулись),
+			// newDebt=0 (долг поставщику не вырос), а в заголовке оседало
+			// противоречие payment_type="credit" + paid_amount=total + debt_amount=0.
+			// Инвариант документирован в CreateReceipt (см. комментарий про
+			// «'paid' = total, 'partial' = paid_amount, 'credit' = 0»), но
+			// соблюдался только при создании.
+			//
+			// Форсируем безусловно, а не только при явном in.PaymentType: иначе
+			// уже испорченные строки чинились бы лишь при повторном выборе типа.
+			// Как следствие, первая же правка такой накладной доводит её до
+			// консистентного вида — вернёт деньги на счёт и начислит долг (а если
+			// поставщик не проставлен, отобьёт понятной ошибкой ниже).
+			newPaidAmount = decimal.Zero
 		case in.PaidAmount != nil:
 			p, perr := decimal.FromString(*in.PaidAmount)
 			if perr != nil || decimal.IsNegative(p) {
@@ -904,14 +927,13 @@ func (s *StockService) UpdateReceipt(ctx context.Context, id string, in ReceiptU
 		default:
 			newPaidAmount = receipt.PaidAmount
 		}
-		// "paid" всегда форсирует newPaidAmount=newTotalAmount (ветка выше) — при
+		// "paid"/"credit" всегда форсируют newPaidAmount (ветки выше) — при
 		// уменьшении total через правку строк это КОРРЕКТНО и намеренно тянет за
 		// собой возврат разницы на счёт (accountDelta ниже, может уйти в обе
 		// стороны — см. комментарий Тира C в шапке функции): "оплачено" по
-		// определению равно total для этого типа, отдельного подтверждения не
-		// требует. Единственный инвариант, который защищаем универсально —
-		// оплачено не может ПРЕВЫШАТЬ сумму накладной (для partial/credit, где
-		// paid_amount не привязан к total жёстко).
+		// определению равно total/нулю для этих типов, отдельного подтверждения не
+		// требует. Свободный paid_amount остаётся только у "partial" — и там
+		// защищаем инвариант: оплачено не может ПРЕВЫШАТЬ сумму накладной.
 		if newPaidAmount.GreaterThan(newTotalAmount) {
 			return apperrors.Wrap("VALIDATION", "оплачено не может быть больше суммы накладной", nil)
 		}
