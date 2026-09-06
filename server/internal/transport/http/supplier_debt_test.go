@@ -313,3 +313,118 @@ func TestCreateReceipt_CreditRequiresSupplier(t *testing.T) {
 		t.Errorf("оплаченная накладная без поставщика: %d %s, want 201", r.StatusCode, b)
 	}
 }
+
+// TestSupplierOpeningDebt_Edit — правка уже внесённого начального долга
+// (владелец ошибся в цифре при переносе задолженности). Отдельный путь от
+// PATCH /stock/receipts/{id}: у записи нет товарных строк, а общий редактор
+// выводит сумму именно из них — он бы обнулил долг. Проверяем: сумма вверх и
+// вниз двигают и debt_amount записи, и supplier.current_debt на чистую дельту;
+// частично погашенный долг нельзя опустить ниже оплаченного; обычную накладную
+// в этот эндпоинт не пускают, а начальный долг — в общий редактор накладных.
+func TestSupplierOpeningDebt_Edit(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accountID := seedForWrite(t, f)
+	topUp(t, gdb, accountID)
+	makeOwner(t, f.rid)
+
+	supName := "Ромашка-правка-долга"
+	sup := &models.Supplier{ID: uuid.NewString(), Name: &supName, CurrentDebt: decimal.Zero, RestaurantID: &f.rid}
+	if err := gdb.Create(sup).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	r, b := f.post(t, "/api/v1/suppliers/"+sup.ID+"/opening-debt", tok, uuid.NewString(),
+		map[string]any{"amount": "500", "note": "было"})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("opening-debt: %d %s", r.StatusCode, b)
+	}
+	var debt models.StockReceipt
+	_ = json.Unmarshal(b, &debt)
+
+	// ── Сумма вверх: 500 → 800 ──────────────────────────────────────────────
+	ur, ub := f.patch(t, "/api/v1/suppliers/"+sup.ID+"/opening-debt/"+debt.ID, tok, uuid.NewString(),
+		map[string]any{"amount": "800", "note": "стало", "date": "2026-01-31"})
+	if ur.StatusCode != http.StatusOK {
+		t.Fatalf("edit up: %d %s", ur.StatusCode, ub)
+	}
+	var edited models.StockReceipt
+	_ = json.Unmarshal(ub, &edited)
+	if !edited.TotalAmount.Equal(decimal.MustFromString("800")) || !edited.DebtAmount.Equal(decimal.MustFromString("800")) {
+		t.Errorf("после правки вверх total=%s debt=%s, want 800/800", edited.TotalAmount, edited.DebtAmount)
+	}
+	if got := supplierDebt(t, gdb, sup.ID); !got.Equal(decimal.MustFromString("800")) {
+		t.Errorf("current_debt после правки вверх = %s, want 800", got)
+	}
+	var fresh models.StockReceipt
+	gdb.Where("id = ?", debt.ID).First(&fresh)
+	if derefStr(fresh.Note) != "стало" || derefStr(fresh.Date) != "2026-01-31" {
+		t.Errorf("note/date не сохранились: %q / %q", derefStr(fresh.Note), derefStr(fresh.Date))
+	}
+	if !fresh.IsOpeningDebt {
+		t.Errorf("is_opening_debt сброшен правкой")
+	}
+
+	// ── Сумма вниз: 800 → 300 ───────────────────────────────────────────────
+	if r, b := f.patch(t, "/api/v1/suppliers/"+sup.ID+"/opening-debt/"+debt.ID, tok, uuid.NewString(),
+		map[string]any{"amount": "300"}); r.StatusCode != http.StatusOK {
+		t.Fatalf("edit down: %d %s", r.StatusCode, b)
+	}
+	if got := supplierDebt(t, gdb, sup.ID); !got.Equal(decimal.MustFromString("300")) {
+		t.Errorf("current_debt после правки вниз = %s, want 300", got)
+	}
+
+	// ── Частичное гашение, затем попытка опустить сумму ниже погашенного ────
+	// ВАЖНО: /pay-debt уменьшает только debt_amount и paid_amount не ведёт,
+	// поэтому «уже погашено» = total − debt (здесь 300 − 100 = 200), а по
+	// paid_amount было бы 0 и гвард не сработал бы.
+	if r, b := f.post(t, "/api/v1/suppliers/"+sup.ID+"/pay-debt", tok, uuid.NewString(),
+		map[string]any{"amount": "200", "account_id": accountID}); r.StatusCode != http.StatusOK {
+		t.Fatalf("pay-debt: %d %s", r.StatusCode, b)
+	}
+	if got := receiptDebt(t, gdb, debt.ID); !got.Equal(decimal.MustFromString("100")) {
+		t.Fatalf("debt_amount после гашения 200 из 300 = %s, want 100", got)
+	}
+	if r, b := f.patch(t, "/api/v1/suppliers/"+sup.ID+"/opening-debt/"+debt.ID, tok, uuid.NewString(),
+		map[string]any{"amount": "150"}); r.StatusCode != http.StatusConflict {
+		t.Errorf("сумма ниже погашенного: %d %s, want 409", r.StatusCode, b)
+	}
+	// Ровно на погашенную сумму — можно, остаток долга схлопывается в ноль.
+	if r, b := f.patch(t, "/api/v1/suppliers/"+sup.ID+"/opening-debt/"+debt.ID, tok, uuid.NewString(),
+		map[string]any{"amount": "200"}); r.StatusCode != http.StatusOK {
+		t.Fatalf("сумма ровно по погашенному: %d %s, want 200", r.StatusCode, b)
+	}
+	if got := receiptDebt(t, gdb, debt.ID); !got.Equal(decimal.Zero) {
+		t.Errorf("debt_amount = %s, want 0", got)
+	}
+	if got := supplierDebt(t, gdb, sup.ID); !got.Equal(decimal.Zero) {
+		t.Errorf("current_debt = %s, want 0", got)
+	}
+
+	// ── Границы эндпоинтов ──────────────────────────────────────────────────
+	// Начальный долг в общий редактор накладных не пускаем: он вывел бы
+	// total из строк (их нет) и обнулил бы долг.
+	if r, b := f.patch(t, "/api/v1/stock/receipts/"+debt.ID, tok, uuid.NewString(),
+		map[string]any{"note": "через общий редактор"}); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("UpdateReceipt на начальном долге: %d %s, want 400", r.StatusCode, b)
+	}
+	// И наоборот — обычную накладную не правим как начальный долг.
+	ingID := uuid.NewString()
+	ingName, ingUnit := "Гречка", "kg"
+	if err := gdb.Create(&models.Ingredient{ID: ingID, Name: &ingName, Unit: &ingUnit, RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+	cr, cb := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+		"payment_type": "credit", "supplier_id": sup.ID,
+		"lines": []map[string]any{{"ingredient_id": ingID, "name": ingName, "qty": "1", "price_per_unit": "10"}},
+	})
+	if cr.StatusCode != http.StatusCreated {
+		t.Fatalf("create receipt: %d %s", cr.StatusCode, cb)
+	}
+	var normal models.StockReceipt
+	_ = json.Unmarshal(cb, &normal)
+	if r, b := f.patch(t, "/api/v1/suppliers/"+sup.ID+"/opening-debt/"+normal.ID, tok, uuid.NewString(),
+		map[string]any{"amount": "999"}); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("обычная накладная как начальный долг: %d %s, want 400", r.StatusCode, b)
+	}
+}

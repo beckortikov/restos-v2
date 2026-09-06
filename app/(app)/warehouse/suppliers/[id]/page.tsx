@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight, Pencil, Undo2, Banknote } from 'lucide-react'
-import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts, fetchStockReturns, createSupplierOpeningDebt, fetchFinancialOperations } from '@/lib/queries'
+import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts, fetchStockReturns, createSupplierOpeningDebt, updateSupplierOpeningDebt, fetchFinancialOperations } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { formatCurrency, formatNum } from '@/lib/helpers'
@@ -98,6 +98,9 @@ export default function EditSupplierPage() {
   const [debtNote, setDebtNote] = useState('')
   const [debtDate, setDebtDate] = useState('')
   const [savingDebt, setSavingDebt] = useState(false)
+  // editingDebt — правим уже внесённый долг (id записи + сколько по нему уже
+  // оплачено: ниже этой суммы бэк не даст опустить, показываем это в форме).
+  const [editingDebt, setEditingDebt] = useState<{ id: string; paid: number } | null>(null)
 
   const totalPurchased = useMemo(() => receipts.reduce((s, r) => s + r.totalAmount, 0), [receipts])
   const totalDebt = useMemo(() => receipts.reduce((s, r) => s + r.debtAmount, 0), [receipts])
@@ -236,20 +239,46 @@ export default function EditSupplierPage() {
     }
   }
 
-  async function handleCreateOpeningDebt() {
+  function openDebtEditor(r: StockReceipt) {
+    // «Погашено» = total − debt, а не paidAmount: гашение долга (/pay-debt)
+    // уменьшает только debt_amount и paidAmount не ведёт — у частично
+    // погашенного начального долга он остаётся нулём. Ниже этой суммы бэк
+    // не пустит (409).
+    setEditingDebt({ id: r.id, paid: Math.max(0, r.totalAmount - r.debtAmount) })
+    setDebtAmount(r.totalAmount)
+    setDebtNote(r.note ?? '')
+    setDebtDate(r.date ?? '')
+    setShowOpeningDebt(true)
+  }
+
+  async function handleSaveOpeningDebt() {
     if (!supplier || debtAmount <= 0 || savingDebt) return
+    if (editingDebt && debtAmount < editingDebt.paid - 0.001) return
     setSavingDebt(true)
     try {
-      await createSupplierOpeningDebt(supplier.id, debtAmount, debtNote.trim() || undefined, debtDate || undefined)
-      setSupplier((prev) => (prev ? { ...prev, currentDebt: prev.currentDebt + debtAmount } : prev))
+      if (editingDebt) {
+        await updateSupplierOpeningDebt(supplier.id, editingDebt.id, {
+          amount: debtAmount, note: debtNote.trim(), date: debtDate || undefined,
+        })
+        toast.success('Долг изменён')
+      } else {
+        await createSupplierOpeningDebt(supplier.id, debtAmount, debtNote.trim() || undefined, debtDate || undefined)
+        toast.success(`Долг ${formatCurrency(debtAmount)} внесён`)
+      }
+      // Долг и накладные перечитываем с сервера: при правке дельта считается
+      // на бэке (сумма минус уже оплаченное), локально её не угадать.
+      fetchSuppliers().then(list => {
+        const fresh = list.find(s => s.id === supplier.id)
+        if (fresh) setSupplier(fresh)
+      }).catch(() => {})
       fetchReceipts({ supplierId: supplier.id }).then(setReceipts).catch(() => {})
-      toast.success(`Долг ${formatCurrency(debtAmount)} внесён`)
       setShowOpeningDebt(false)
+      setEditingDebt(null)
       setDebtAmount(0)
       setDebtNote('')
       setDebtDate('')
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Не удалось внести долг')
+      toast.error(e instanceof Error ? e.message : 'Не удалось сохранить долг')
     } finally {
       setSavingDebt(false)
     }
@@ -342,7 +371,7 @@ export default function EditSupplierPage() {
                 {(supplier?.creditLimit ?? 0) > 0 && <span className="text-xs text-muted-foreground">из {formatCurrency(supplier!.creditLimit)}</span>}
                 <button
                   type="button"
-                  onClick={() => setShowOpeningDebt(true)}
+                  onClick={() => { setEditingDebt(null); setDebtAmount(0); setDebtNote(''); setDebtDate(''); setShowOpeningDebt(true) }}
                   className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
                   title="Долг, который был у поставщика до перехода на эту кассу — без накладной"
                 >
@@ -692,6 +721,22 @@ export default function EditSupplierPage() {
                         </div>
                         {r.note && <p className="text-[11px] text-muted-foreground px-3 py-2 border-t border-border/60">Примечание: {r.note}</p>}
 
+                        {/* Начальный долг правится только отсюда: у записи нет
+                            товарных строк, и общий редактор накладных вывел бы
+                            сумму из них (то есть ноль). */}
+                        {r.isOpeningDebt && (
+                          <div className="border-t border-border/60 px-3 py-2">
+                            <button
+                              type="button"
+                              onClick={() => openDebtEditor(r)}
+                              className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+                            >
+                              <Pencil className="size-3" />
+                              Изменить долг
+                            </button>
+                          </div>
+                        )}
+
                         {/* Возвраты по этой накладной — какие позиции и на сколько
                             вернули (в т.ч. частичный). Отменённые — зачёркнуты. */}
                         {(returnDocsByReceipt.get(r.id) ?? []).length > 0 && (
@@ -742,18 +787,23 @@ export default function EditSupplierPage() {
         open={showOpeningDebt}
         onOpenChange={(v) => {
           setShowOpeningDebt(v)
-          if (!v) { setDebtAmount(0); setDebtNote(''); setDebtDate('') }
+          if (!v) { setDebtAmount(0); setDebtNote(''); setDebtDate(''); setEditingDebt(null) }
         }}
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Долг поставщику без накладной</DialogTitle>
+            <DialogTitle>{editingDebt ? 'Изменить начальный долг' : 'Долг поставщику без накладной'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Если у {supplier?.name || 'поставщика'} уже был долг ещё до перехода на эту кассу —
-              впишите сумму здесь. Остатки склада это не тронет: долг сразу встанет в общую
-              задолженность и гасится обычной оплатой, как по накладной.
+              {editingDebt ? (
+                <>Исправьте сумму, дату или комментарий. Задолженность поставщика пересчитается
+                  на разницу — остатки склада это не тронет.</>
+              ) : (
+                <>Если у {supplier?.name || 'поставщика'} уже был долг ещё до перехода на эту кассу —
+                  впишите сумму здесь. Остатки склада это не тронет: долг сразу встанет в общую
+                  задолженность и гасится обычной оплатой, как по накладной.</>
+              )}
             </p>
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-foreground">Сумма долга</label>
@@ -764,6 +814,13 @@ export default function EditSupplierPage() {
                 placeholder="0"
                 className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
               />
+              {/* Часть долга могла быть уже погашена — ниже этой суммы бэк не
+                  пустит (иначе по записи получилась бы необъяснимая переплата). */}
+              {editingDebt && editingDebt.paid > 0.005 && (
+                <p className={`text-xs ${debtAmount < editingDebt.paid - 0.001 ? 'text-destructive' : 'text-muted-foreground'}`}>
+                  Уже погашено {formatCurrency(editingDebt.paid)} — сумма не может быть меньше.
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-foreground">
@@ -800,12 +857,12 @@ export default function EditSupplierPage() {
             </button>
             <button
               type="button"
-              onClick={handleCreateOpeningDebt}
-              disabled={debtAmount <= 0 || savingDebt}
+              onClick={handleSaveOpeningDebt}
+              disabled={debtAmount <= 0 || savingDebt || (!!editingDebt && debtAmount < editingDebt.paid - 0.001)}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
             >
               <Banknote className="size-4" />
-              {savingDebt ? 'Сохраняю…' : 'Внести долг'}
+              {savingDebt ? 'Сохраняю…' : editingDebt ? 'Сохранить' : 'Внести долг'}
             </button>
           </DialogFooter>
         </DialogContent>

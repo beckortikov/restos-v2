@@ -282,6 +282,21 @@ func (h *SuppliersHandler) CreateOpeningDebt(w http.ResponseWriter, r *http.Requ
 	respond.JSON(w, http.StatusCreated, rec)
 }
 
+// UpdateOpeningDebt — PATCH /api/v1/suppliers/{id}/opening-debt/{debt_id}.
+func (h *SuppliersHandler) UpdateOpeningDebt(w http.ResponseWriter, r *http.Request) {
+	var in service.SupplierOpeningDebtPatch
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	rec, err := h.svc.UpdateOpeningDebt(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "debt_id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, rec)
+}
+
 // ─── Reservations ──────────────────────────────────────────────────────────
 
 type ReservationsHandler struct{ svc *service.ReservationsService }

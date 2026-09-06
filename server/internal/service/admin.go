@@ -1145,6 +1145,131 @@ func (s *SuppliersService) CreateOpeningDebt(ctx context.Context, id string, in 
 	return receipt, nil
 }
 
+// SupplierOpeningDebtPatch — body PATCH /suppliers/{id}/opening-debt/{debt_id}.
+// Все поля опциональны: не переданное не меняется.
+type SupplierOpeningDebtPatch struct {
+	Amount *string `json:"amount,omitempty"`
+	Note   *string `json:"note,omitempty"`
+	Date   *string `json:"date,omitempty"`
+}
+
+// UpdateOpeningDebt — правка уже внесённого начального долга (сумма/дата/
+// комментарий). Владелец ошибся в цифре при переносе задолженности со старой
+// системы — исправить это было нечем: общий редактор накладных
+// (StockService.UpdateReceipt) считает сумму из СТРОК, а у такой записи строк
+// нет по построению (067), поэтому он вывел бы total=0 и молча обнулил долг.
+// Отдельный метод правит total_amount напрямую — единственный корректный путь
+// для записи без позиций.
+//
+// Права — те же, что на внесение (suppliers.manage ИЛИ finance.manage), а не
+// owner: кто может создать долг, должен уметь исправить свою же опечатку.
+// Долг по-прежнему живёт в stock_receipts.debt_amount, поэтому «Пересчитать
+// долги» (RecomputeDebts) и гашение (allocateDebtPayment) остаются согласованы.
+func (s *SuppliersService) UpdateOpeningDebt(ctx context.Context, supplierID, debtID string, in SupplierOpeningDebtPatch) (*models.StockReceipt, error) {
+	if !hasPermFor(ctx, s.r, "suppliers.manage") && !hasPermFor(ctx, s.r, "finance.manage") {
+		return nil, apperrors.Wrap("FORBIDDEN", "недостаточно прав для правки долга поставщику", nil)
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+
+	var out *models.StockReceipt
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		// Канонический порядок замков: поставщик → накладная (как в CreateOpeningDebt
+		// и StockService.UpdateReceipt).
+		var sup models.Supplier
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, supplierID).First(&sup).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
+		var receipt models.StockReceipt
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ? AND supplier_id = ?", rid, debtID, supplierID).
+			First(&receipt).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
+		// Обычную накладную сюда не пускаем: её сумма выводится из строк, править
+		// её total_amount напрямую значит разъехаться со складом и проводками.
+		if !receipt.IsOpeningDebt {
+			return apperrors.Wrap("VALIDATION", "это обычная накладная, а не начальный долг — правьте её через редактирование накладной", nil)
+		}
+
+		newTotal := receipt.TotalAmount
+		if in.Amount != nil {
+			amt, perr := decimal.FromString(*in.Amount)
+			if perr != nil || !decimal.IsPositive(amt) {
+				return apperrors.Wrap("VALIDATION", "amount must be > 0", perr)
+			}
+			newTotal = decimal.Normalize(amt)
+		}
+		// «Уже погашено» считаем как total − debt, а НЕ по paid_amount:
+		// гашение долга (allocateDebtPayment) уменьшает только debt_amount и
+		// paid_amount не ведёт вовсе, так что у частично погашенного начального
+		// долга paid_amount остаётся нулём. Опустить сумму ниже погашенного
+		// нельзя — долг ушёл бы в минус.
+		settled := decimal.Normalize(decimal.Sub(receipt.TotalAmount, receipt.DebtAmount))
+		if newTotal.LessThan(settled) {
+			return apperrors.Wrap("CONFLICT",
+				"сумма долга меньше уже погашенного ("+settled.String()+") — сначала оформите возврат переплаты", nil)
+		}
+
+		// oldDebt фиксируем ДО Updates: GORM пишет значения из map обратно в
+		// переданную структуру, поэтому после вызова receipt.DebtAmount уже равен
+		// новому — дельта вышла бы нулевой и current_debt не сдвинулся бы.
+		oldDebt := receipt.DebtAmount
+		newDebt := decimal.Normalize(decimal.Sub(newTotal, settled))
+		updates := map[string]any{
+			"total_amount": newTotal,
+			"debt_amount":  newDebt,
+			"updated_at":   now,
+		}
+		if in.Note != nil {
+			updates["note"] = strings.TrimSpace(*in.Note)
+		}
+		if in.Date != nil && *in.Date != "" {
+			updates["date"] = *in.Date
+		}
+		if err := tx.Model(&receipt).Updates(updates).Error; err != nil {
+			return err
+		}
+		// Денормализованный current_debt двигаем на ЧИСТУЮ дельту долга записи.
+		if delta := decimal.Sub(newDebt, oldDebt); !delta.IsZero() {
+			sup.CurrentDebt = decimal.Normalize(decimal.Add(sup.CurrentDebt, delta))
+			if decimal.IsNegative(sup.CurrentDebt) {
+				// Дрейф денормализации (восстановление из бэкапа и т.п.) — в минус
+				// долг не уводим, это чинится кнопкой «Пересчитать долги».
+				sup.CurrentDebt = decimal.Zero
+			}
+			if err := tx.Model(&sup).Updates(map[string]any{"current_debt": sup.CurrentDebt, "updated_at": now}).Error; err != nil {
+				return err
+			}
+			if err := recordSupplierSync(tx, []string{sup.ID}); err != nil {
+				return err
+			}
+		}
+		if err := recordReceiptSync(tx, []string{receipt.ID}); err != nil {
+			return err
+		}
+		receipt.TotalAmount = newTotal
+		receipt.DebtAmount = newDebt
+		out = &receipt
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ─── Reservations ──────────────────────────────────────────────────────────
 
 type ReservationsService struct{ r *repo.Repo }

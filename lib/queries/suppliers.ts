@@ -63,6 +63,25 @@ export async function createSupplierOpeningDebt(id: string, amount: number, note
   logAction('supplier.opening_debt', 'supplier', id, undefined, { amount })
 }
 
+// updateSupplierOpeningDebt — правка уже внесённого начального долга. Отдельный
+// путь от updateReceipt: у записи нет товарных строк, а общий редактор выводит
+// сумму именно из них (обнулил бы долг). Бэк двигает current_debt на дельту.
+export async function updateSupplierOpeningDebt(
+  id: string,
+  debtId: string,
+  patch: { amount?: number; note?: string; date?: string },
+): Promise<void> {
+  await unwrap(api.PATCH('/api/v1/suppliers/{id}/opening-debt/{debt_id}', {
+    params: { path: { id, debt_id: debtId } },
+    body: {
+      amount: patch.amount !== undefined ? String(patch.amount) : undefined,
+      note: patch.note,
+      date: patch.date || undefined,
+    },
+  }))
+  logAction('supplier.opening_debt_edit', 'supplier', id, undefined, { debtId, amount: patch.amount })
+}
+
 // recomputeSupplierDebts — пересчёт current_debt всех поставщиков из накладных
 // (Σ debt_amount − Σ оплат долга). Нужен, когда поле разошлось: бэкфилл-миграция
 // не отработала после восстановления/обновления. Возвращает число обновлённых.

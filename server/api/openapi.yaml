@@ -3542,6 +3542,27 @@ paths:
       parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplierOpeningDebtInput" } } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
+  /api/v1/suppliers/{id}/opening-debt/{debt_id}:
+    patch:
+      tags: [admin]
+      summary: Правка начального долга поставщику
+      description: |
+        Меняет сумму/дату/комментарий уже внесённого долга без накладной и двигает
+        `suppliers.current_debt` на чистую дельту. Существует отдельно от
+        `PATCH /stock/receipts/{id}` потому, что у такой записи НЕТ товарных строк:
+        общий редактор выводит сумму из строк и обнулил бы долг. Обычная накладная
+        по этому пути отбивается (400), как и попытка опустить сумму ниже уже
+        оплаченного (409).
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: debt_id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplierOpeningDebtPatch" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } }
+        "409":
+          description: Сумма ниже уже оплаченного.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
 
   /api/v1/reservations:
     get:
@@ -6632,6 +6653,13 @@ components:
         amount: { $ref: "#/components/schemas/Decimal" }
         note: { type: string }
         date: { type: string, description: "YYYY-MM-DD, когда фактически возник долг. Пусто = сегодня." }
+    SupplierOpeningDebtPatch:
+      type: object
+      description: "Все поля опциональны — не переданное не меняется."
+      properties:
+        amount: { $ref: "#/components/schemas/Decimal" }
+        note: { type: string }
+        date: { type: string, description: "YYYY-MM-DD" }
     SuppliersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Supplier" } } } }
 
     Reservation:

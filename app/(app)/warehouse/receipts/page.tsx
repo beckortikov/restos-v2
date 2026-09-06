@@ -333,7 +333,10 @@ export default function ReceiptsPage() {
                     Закрыть
                   </button>
                   <div className="flex gap-2">
-                    {isOwner && (
+                    {/* Начальный долг (067) правится только в карточке
+                        поставщика: у него нет товарных строк, а этот редактор
+                        выводит сумму именно из них (бэк такую правку отбивает). */}
+                    {isOwner && !r.isOpeningDebt && (
                       <button
                         type="button"
                         onClick={() => { setEditFor(r); setDetailFor(null) }}

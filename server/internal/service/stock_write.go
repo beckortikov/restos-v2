@@ -624,6 +624,14 @@ func (s *StockService) UpdateReceipt(ctx context.Context, id string, in ReceiptU
 			}
 			return err
 		}
+		// Начальный долг (067) — запись БЕЗ товарных строк: сумма живёт прямо в
+		// total_amount, выводить её здесь не из чего. Тир C ниже считает total
+		// суммой строк, то есть для такой записи вывел бы 0 и молча обнулил долг
+		// вместе с current_debt поставщика. Правится отдельным путём —
+		// SuppliersService.UpdateOpeningDebt (PATCH /suppliers/{id}/opening-debt/{id}).
+		if receipt.IsOpeningDebt {
+			return apperrors.Wrap("VALIDATION", "это начальный долг без накладной — правьте его в карточке поставщика", nil)
+		}
 		if supplierChanging && decimal.IsPositive(receipt.DebtAmount) {
 			return apperrors.Wrap("VALIDATION", "нельзя сменить поставщика: по накладной есть непогашенный долг — сначала погасите или верните долг", nil)
 		}

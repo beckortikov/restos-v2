@@ -9507,6 +9507,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/suppliers/{id}/opening-debt/{debt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Правка начального долга поставщику
+         * @description Меняет сумму/дату/комментарий уже внесённого долга без накладной и двигает
+         *     `suppliers.current_debt` на чистую дельту. Существует отдельно от
+         *     `PATCH /stock/receipts/{id}` потому, что у такой записи НЕТ товарных строк:
+         *     общий редактор выводит сумму из строк и обнулил бы долг. Обычная накладная
+         *     по этому пути отбивается (400), как и попытка опустить сумму ниже уже
+         *     оплаченного (409).
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                    debt_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SupplierOpeningDebtPatch"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReceipt"];
+                    };
+                };
+                /** @description Сумма ниже уже оплаченного. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/api/v1/reservations": {
         parameters: {
             query?: never;
@@ -17995,6 +18058,13 @@ export interface components {
             amount: components["schemas"]["Decimal"];
             note?: string;
             /** @description YYYY-MM-DD, когда фактически возник долг. Пусто = сегодня. */
+            date?: string;
+        };
+        /** @description Все поля опциональны — не переданное не меняется. */
+        SupplierOpeningDebtPatch: {
+            amount?: components["schemas"]["Decimal"];
+            note?: string;
+            /** @description YYYY-MM-DD */
             date?: string;
         };
         SuppliersList: {
