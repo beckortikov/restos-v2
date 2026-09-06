@@ -900,11 +900,28 @@ func (s *StockService) UpdateReceipt(ctx context.Context, id string, in ReceiptU
 		newServiceTotal = decimal.Normalize(newServiceTotal)
 
 		// ── Тир C: оплата ────────────────────────────────────────────────
+		// repaid — часть долга, погашенная ПОЗЖЕ через /pay-debt. Отдельного поля
+		// под неё нет: allocateDebtPayment уменьшает только debt_amount и
+		// paid_amount не ведёт вовсе, поэтому единственный след — вот эта
+		// разность. Без неё правка считала долг как total − paid и возвращала
+		// погашенное обратно в долг: ресторан заплатил, а после правки ЛЮБОГО
+		// поля (хоть даты) долг поставщику снова вырастал, а перевод в
+		// «оплачено» списывал всю сумму накладной поверх уже отданных денег.
+		repaid := decimal.Normalize(decimal.Sub(decimal.Sub(receipt.TotalAmount, receipt.PaidAmount), receipt.DebtAmount))
+		if decimal.IsNegative(repaid) {
+			repaid = decimal.Zero // дрейф денормализации — не уводим расчёт в минус
+		}
+
 		newPaymentType := derefOr(in.PaymentType, derefOr(receipt.PaymentType, "paid"))
 		var newPaidAmount decimal.Decimal
 		switch {
 		case newPaymentType == "paid":
-			newPaidAmount = newTotalAmount
+			// «Оплачено» = долга не остаётся. Доплатить нужно ТОЛЬКО остаток:
+			// то, что уже погашено через pay-debt, второй раз не списываем.
+			newPaidAmount = decimal.Normalize(decimal.Sub(newTotalAmount, repaid))
+			if decimal.IsNegative(newPaidAmount) {
+				newPaidAmount = decimal.Zero
+			}
 		case newPaymentType == "credit":
 			// Симметрично "paid": тип оплаты — источник истины, paid_amount из него
 			// ВЫВОДИТСЯ, а не принимается от клиента. "Кредит" по определению значит
@@ -939,13 +956,18 @@ func (s *StockService) UpdateReceipt(ctx context.Context, id string, in ReceiptU
 		// уменьшении total через правку строк это КОРРЕКТНО и намеренно тянет за
 		// собой возврат разницы на счёт (accountDelta ниже, может уйти в обе
 		// стороны — см. комментарий Тира C в шапке функции): "оплачено" по
-		// определению равно total/нулю для этих типов, отдельного подтверждения не
-		// требует. Свободный paid_amount остаётся только у "partial" — и там
-		// защищаем инвариант: оплачено не может ПРЕВЫШАТЬ сумму накладной.
-		if newPaidAmount.GreaterThan(newTotalAmount) {
+		// определению равно остатку/нулю для этих типов, отдельного подтверждения
+		// не требует. Свободный paid_amount остаётся только у "partial" — и там
+		// защищаем инвариант: оплачено ПЛЮС уже погашенное не может превышать
+		// сумму накладной (иначе долг ушёл бы в минус).
+		if decimal.Add(newPaidAmount, repaid).GreaterThan(newTotalAmount) {
+			if decimal.IsPositive(repaid) {
+				return apperrors.Wrap("VALIDATION",
+					"оплачено ("+newPaidAmount.String()+") плюс уже погашенное ("+repaid.String()+") больше суммы накладной", nil)
+			}
 			return apperrors.Wrap("VALIDATION", "оплачено не может быть больше суммы накладной", nil)
 		}
-		newDebt := decimal.Normalize(decimal.Sub(newTotalAmount, newPaidAmount))
+		newDebt := decimal.Normalize(decimal.Sub(decimal.Sub(newTotalAmount, newPaidAmount), repaid))
 		if decimal.IsPositive(newDebt) && newSupplierID == "" {
 			return apperrors.Wrap("VALIDATION", "накладная в долг требует поставщика: долг не на кого записать", nil)
 		}

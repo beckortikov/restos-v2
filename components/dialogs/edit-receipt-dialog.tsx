@@ -74,18 +74,23 @@ export function EditReceiptDialog({ receipt, open, onOpenChange, onSuccess }: {
 
   // total пересчитывается на лету из строк — то же, что увидит бэк.
   const total = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.pricePerUnit) || 0), 0)
+  // repaid — часть долга, погашенная позже через «оплатить долг»: отдельного
+  // поля под неё нет (гашение уменьшает только debtAmount), единственный след —
+  // эта разность. Учитываем её, иначе предпросмотр обещал бы списать всю сумму
+  // накладной поверх уже отданных денег (бэк считает так же — UpdateReceipt).
+  const repaid = Math.max(0, receipt.totalAmount - receipt.paidAmount - receipt.debtAmount)
   // Оплачено ВЫВОДИТСЯ из типа оплаты, свободно вводится только у «Частично»
-  // (бэк форсирует ровно так же — UpdateReceipt, Тир C). Раньше «Кредит» брал
-  // сумму из префилленного поля, и перевод оплаченной накладной в кредит
-  // отправлял paid=total: деньги не возвращались, долг не рос.
-  const paidNum = paymentType === 'paid' ? total
+  // (бэк форсирует ровно так же). Раньше «Кредит» брал сумму из префилленного
+  // поля, и перевод оплаченной накладной в кредит отправлял paid=total: деньги
+  // не возвращались, долг не рос.
+  const paidNum = paymentType === 'paid' ? Math.max(0, total - repaid)
     : paymentType === 'credit' ? 0
       : (Number(paidAmount.replace(',', '.')) || 0)
   const acc = accounts.find(a => a.id === accountId)
   const paidDelta = paidNum - (receipt.paidAmount ?? 0)
-  const newDebt = total - paidNum
+  const newDebt = Math.max(0, total - paidNum - repaid)
   const overBalance = paidDelta > 0 && !!acc && paidDelta > acc.balance + 0.001
-  const overTotal = paidNum > total + 0.001
+  const overTotal = paidNum + repaid > total + 0.001
   const needsAccount = paidDelta !== 0 && !accountId
   const needsSupplier = newDebt > 0.001 && !receipt.supplierId
   const anyLineBelowMin = lines.some(l => (Number(l.qty) || 0) < l.minQty - 0.001)
@@ -207,7 +212,16 @@ export function EditReceiptDialog({ receipt, open, onOpenChange, onSuccess }: {
             {overTotal && (
               <p className="flex items-center gap-1.5 text-xs text-destructive">
                 <AlertTriangle className="size-3.5 shrink-0" />
-                Оплачено не может быть больше суммы накладной ({formatCurrency(total)}).
+                {repaid > 0.001
+                  ? `Оплачено плюс уже погашенное (${formatCurrency(repaid)}) не может быть больше суммы накладной (${formatCurrency(total)}).`
+                  : `Оплачено не может быть больше суммы накладной (${formatCurrency(total)}).`}
+              </p>
+            )}
+            {/* Долг, погашенный через «оплатить долг», в paidAmount не попадает —
+                без этой строки цифры в форме выглядели бы необъяснимо. */}
+            {repaid > 0.001 && (
+              <p className="text-xs text-muted-foreground">
+                Уже погашено по долгу: {formatCurrency(repaid)} — повторно не спишется.
               </p>
             )}
             {newDebt > 0.001 && (

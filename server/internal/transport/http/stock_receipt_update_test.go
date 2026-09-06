@@ -507,3 +507,101 @@ func derefStr(s *string) string {
 	}
 	return *s
 }
+
+// TestStockReceipt_Update_PreservesDebtRepaidViaPayDebt — правка накладной не
+// должна «забывать» долг, уже погашенный через /pay-debt.
+//
+// Ловушка: гашение долга (allocateDebtPayment) уменьшает ТОЛЬКО debt_amount и
+// paid_amount не ведёт вовсе — то есть погашенная часть нигде не отражена,
+// кроме как в разнице total − paid − debt. UpdateReceipt же считал долг как
+// total − paid_amount, и любая правка (хоть строки, хоть даты) возвращала
+// погашенное обратно в долг: ресторан заплатил, а долг поставщику снова вырос.
+func TestStockReceipt_Update_PreservesDebtRepaidViaPayDebt(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accID := seedForWrite(t, f)
+	topUp(t, gdb, accID) // 10000
+	makeOwner(t, f.rid)
+
+	supID := uuid.NewString()
+	supName := "Поставщик-долг"
+	if err := gdb.Create(&models.Supplier{ID: supID, Name: &supName, RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+	ingID := uuid.NewString()
+	ingName, ingUnit := "Мука", "kg"
+	if err := gdb.Create(&models.Ingredient{ID: ingID, Name: &ingName, Unit: &ingUnit, RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Накладная в кредит на 1000 (10 × 100).
+	cr, cb := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+		"payment_type": "credit", "supplier_id": supID,
+		"lines": []map[string]any{{"ingredient_id": ingID, "name": ingName, "qty": "10", "price_per_unit": "100"}},
+	})
+	if cr.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d %s", cr.StatusCode, cb)
+	}
+	var receipt models.StockReceipt
+	_ = json.Unmarshal(cb, &receipt)
+
+	// Гасим 400 долга — debt 1000 → 600, paid_amount при этом остаётся 0.
+	if r, b := f.post(t, "/api/v1/suppliers/"+supID+"/pay-debt", tok, uuid.NewString(),
+		map[string]any{"amount": "400", "account_id": accID}); r.StatusCode != http.StatusOK {
+		t.Fatalf("pay-debt: %d %s", r.StatusCode, b)
+	}
+	if got := receiptDebt(t, gdb, receipt.ID); !got.Equal(decimal.MustFromString("600")) {
+		t.Fatalf("debt после гашения = %s, want 600", got)
+	}
+	if got := supplierDebt(t, gdb, supID); !got.Equal(decimal.MustFromString("600")) {
+		t.Fatalf("current_debt после гашения = %s, want 600", got)
+	}
+
+	// Правим НЕденежное поле (дату). Долг обязан остаться 600: погашенные 400
+	// никуда не делись.
+	if r, b := f.patch(t, "/api/v1/stock/receipts/"+receipt.ID, tok, uuid.NewString(),
+		map[string]any{"date": "2026-07-15"}); r.StatusCode != http.StatusOK {
+		t.Fatalf("update date: %d %s", r.StatusCode, b)
+	}
+	if got := receiptDebt(t, gdb, receipt.ID); !got.Equal(decimal.MustFromString("600")) {
+		t.Errorf("debt_amount после правки даты = %s, want 600 (погашенные 400 вернулись в долг)", got)
+	}
+	if got := supplierDebt(t, gdb, supID); !got.Equal(decimal.MustFromString("600")) {
+		t.Errorf("current_debt после правки даты = %s, want 600", got)
+	}
+
+	// Уменьшаем строку: 10 → 9 (total 1000 → 900). Долг = 900 − 400 = 500.
+	var line models.StockReceiptLine
+	if err := gdb.Where("receipt_id = ?", receipt.ID).First(&line).Error; err != nil {
+		t.Fatal(err)
+	}
+	if r, b := f.patch(t, "/api/v1/stock/receipts/"+receipt.ID, tok, uuid.NewString(), map[string]any{
+		"lines": []map[string]any{{"line_id": line.ID, "qty": "9"}},
+	}); r.StatusCode != http.StatusOK {
+		t.Fatalf("update line: %d %s", r.StatusCode, b)
+	}
+	if got := receiptDebt(t, gdb, receipt.ID); !got.Equal(decimal.MustFromString("500")) {
+		t.Errorf("debt_amount после уменьшения суммы = %s, want 500", got)
+	}
+	if got := supplierDebt(t, gdb, supID); !got.Equal(decimal.MustFromString("500")) {
+		t.Errorf("current_debt после уменьшения суммы = %s, want 500", got)
+	}
+
+	// Переводим в «Оплачено»: доплатить нужно ровно остаток долга (500), а не
+	// всю сумму накладной — 400 уже погашены через pay-debt.
+	balBefore := accBalance(t, gdb, accID)
+	if r, b := f.patch(t, "/api/v1/stock/receipts/"+receipt.ID, tok, uuid.NewString(),
+		map[string]any{"payment_type": "paid", "account_id": accID}); r.StatusCode != http.StatusOK {
+		t.Fatalf("update to paid: %d %s", r.StatusCode, b)
+	}
+	spent := decimal.Sub(balBefore, accBalance(t, gdb, accID))
+	if !spent.Equal(decimal.MustFromString("500")) {
+		t.Errorf("списано при переводе в «оплачено» = %s, want 500 (не 900 — 400 уже погашены)", spent)
+	}
+	if got := receiptDebt(t, gdb, receipt.ID); !got.Equal(decimal.Zero) {
+		t.Errorf("debt_amount после «оплачено» = %s, want 0", got)
+	}
+	if got := supplierDebt(t, gdb, supID); !got.Equal(decimal.Zero) {
+		t.Errorf("current_debt после «оплачено» = %s, want 0", got)
+	}
+}
