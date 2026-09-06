@@ -1654,7 +1654,7 @@ func applyMirrorSideEffect(tx *gorm.DB, op *models.FinancialOperation) error {
 	var rp models.RecurringPayment
 	err = tx.Where("id = ? AND restaurant_id = ?", ref, rid).First(&rp).Error
 	if err == nil {
-		return advanceRecurringDue(tx, &rp, now)
+		return applyRecurringDuePayment(tx, &rp, op.Amount, now)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
@@ -1728,7 +1728,7 @@ func reverseMirrorSideEffect(tx *gorm.DB, op *models.FinancialOperation) error {
 	var rp models.RecurringPayment
 	err = tx.Where("id = ? AND restaurant_id = ?", ref, rid).First(&rp).Error
 	if err == nil {
-		return retreatRecurringDue(tx, &rp, now)
+		return reverseRecurringDuePayment(tx, &rp, op.Amount, now)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
@@ -1817,19 +1817,46 @@ func restoreReceiptDebt(tx *gorm.DB, receipt *models.StockReceipt, amount decima
 	return recordSupplierSync(tx, []string{sup.ID})
 }
 
-// retreatRecurringDue — откат срока регулярного платежа на месяц назад.
-// Симметрично advanceRecurringDue: каждый платёж двигал срок ровно на один
-// шаг, поэтому обратный шаг возвращает его на место и при нескольких платежах
-// подряд. last_paid_at обнуляем: прежнего значения мы не храним, а оставить
-// его от отменённого платежа — соврать, что платёж был.
-func retreatRecurringDue(tx *gorm.DB, rp *models.RecurringPayment, now time.Time) error {
-	if rp.NextDue == nil || *rp.NextDue == "" {
-		return nil
+// reverseRecurringDuePayment — откат отменённого платежа central'а, зеркало
+// applyRecurringDuePayment. Возвращаем сумму в «сколько ещё должны»:
+//
+//   - цикл ОТКРЫТ (remaining_amount задан) → его оставил частичный платёж:
+//     возвращаем сумму в остаток, срок не трогаем. Остаток дорос до полной
+//     Amount → цикл снова «нетронутый», remaining_amount в NULL.
+//   - цикл ЗАКРЫТ (remaining_amount пуст) → его закрыл этот платёж: откатываем
+//     срок на месяц назад и снова открываем цикл ровно на возвращаемую сумму
+//     (amount ≥ Amount значит платёж покрывал полный цикл → NULL).
+//
+// Отмены в порядке LIFO (сначала последний платёж) восстанавливают состояние
+// точно. В произвольном порядке — приближение: сколько именно причиталось до
+// конкретного платежа, в строке не хранится, историю пришлось бы поднимать по
+// financial_operations. Тот же компромисс, что и раньше у last_paid_at (его
+// прежнего значения мы тоже не храним и просто обнуляем — оставить его от
+// отменённого платежа значило бы соврать, что платёж был).
+func reverseRecurringDuePayment(tx *gorm.DB, rp *models.RecurringPayment, amount decimal.Decimal, now time.Time) error {
+	updates := map[string]any{
+		"last_paid_at":     nil,
+		"last_paid_amount": nil,
+		"updated_at":       now,
 	}
-	prev := retreatMonth(*rp.NextDue, rp.DayOfMonth)
-	if err := tx.Model(rp).Updates(map[string]any{
-		"next_due": prev, "last_paid_at": nil, "updated_at": now,
-	}).Error; err != nil {
+	if rp.RemainingAmount != nil {
+		restored := decimal.Normalize(decimal.Add(*rp.RemainingAmount, amount))
+		if restored.LessThan(rp.Amount) {
+			updates["remaining_amount"] = restored
+		} else {
+			updates["remaining_amount"] = nil
+		}
+	} else {
+		if rp.NextDue != nil && *rp.NextDue != "" {
+			updates["next_due"] = retreatMonth(*rp.NextDue, rp.DayOfMonth)
+		}
+		if decimal.IsPositive(amount) && amount.LessThan(rp.Amount) {
+			updates["remaining_amount"] = amount
+		} else {
+			updates["remaining_amount"] = nil
+		}
+	}
+	if err := tx.Model(rp).Updates(updates).Error; err != nil {
 		return err
 	}
 	return recordRecurringPaymentSync(tx, []string{rp.ID})
@@ -1887,25 +1914,42 @@ func payReceiptDebt(tx *gorm.DB, receipt *models.StockReceipt, amount decimal.De
 	return recordSupplierSync(tx, []string{sup.ID})
 }
 
-// advanceRecurringDue — сдвиг срока регулярного платежа, когда его оплатил
-// central за филиал (Фаза Р). База — сам next_due, а не сегодня: ритм дня
-// месяца сохраняется, даже если платёж провели раньше или позже.
+// applyRecurringDuePayment — регулярный платёж филиала оплатил central (Фаза Р).
+// Ровно та же семантика цикла, что в RecurringPaymentsService.Pay: покрыли
+// остаток целиком → срок на месяц вперёд и remaining_amount сброшен; не
+// покрыли → цикл остаётся открытым, remaining_amount уменьшается, срок НЕ
+// двигается. База сдвига — сам next_due, а не сегодня: ритм дня месяца
+// сохраняется, даже если платёж провели раньше или позже.
 //
-// ⚠️ В ОТЛИЧИЕ от RecurringPaymentsService.Pay (остаток текущего цикла при
-// частичной оплате) — здесь amount не участвует, срок двигается безусловно.
-// Мирроринг центр→филиал пока не знает о remaining_amount; если центр гасит
-// филиальский долг частями, это не отражается тут же, как в локальной
-// оплате. Не совпадающий с локальным путём кусок, а не забытый — не трогаем,
-// пока в частичных платежах через сеть нет реального кейса.
-func advanceRecurringDue(tx *gorm.DB, rp *models.RecurringPayment, now time.Time) error {
-	base := now.Format("2006-01-02")
-	if rp.NextDue != nil && *rp.NextDue != "" {
-		base = *rp.NextDue
+// Раньше здесь amount не участвовал вовсе и срок двигался безусловно: если
+// центр гасил платёж филиала частями, первый же перевод «закрывал» месяц, а
+// строка снова показывала полную сумму — тот же баг, что чинили в локальной
+// оплате (v3.16.314), просто на другом пути. Сумма всё это время была под
+// рукой: applyMirrorSideEffect передаёт op.Amount в соседнюю ветку
+// (payReceiptDebt), протаскивать её через sync-payload не понадобилось.
+func applyRecurringDuePayment(tx *gorm.DB, rp *models.RecurringPayment, amount decimal.Decimal, now time.Time) error {
+	owed := rp.Amount
+	if rp.RemainingAmount != nil {
+		owed = *rp.RemainingAmount
 	}
-	nd := advanceMonth(base, rp.DayOfMonth)
-	if err := tx.Model(rp).Updates(map[string]any{
-		"next_due": nd, "last_paid_at": now, "updated_at": now,
-	}).Error; err != nil {
+	remaining := decimal.Normalize(decimal.Sub(owed, amount))
+
+	updates := map[string]any{
+		"last_paid_at":     now,
+		"last_paid_amount": amount,
+		"updated_at":       now,
+	}
+	if decimal.IsPositive(remaining) {
+		updates["remaining_amount"] = remaining
+	} else {
+		base := now.Format("2006-01-02")
+		if rp.NextDue != nil && *rp.NextDue != "" {
+			base = *rp.NextDue
+		}
+		updates["next_due"] = advanceMonth(base, rp.DayOfMonth)
+		updates["remaining_amount"] = nil
+	}
+	if err := tx.Model(rp).Updates(updates).Error; err != nil {
 		return err
 	}
 	return recordRecurringPaymentSync(tx, []string{rp.ID})
